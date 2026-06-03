@@ -28,19 +28,20 @@ const BROWSER_HEADERS = {
 export class OddsAgoraProvider implements OddsProviderAdapter {
   readonly name = 'oddsagora';
   readonly description =
-    'OddsAgora.com.br — Comparador brasileiro de odds (probe diagnóstico completo)';
+    'OddsAgora.com.br — Comparador brasileiro de odds (Etapa 4+5: parser e mapping)';
 
   isConfigured(): boolean {
     return true;
   }
 
-  async probeSource(): Promise<ProbeResult> {
+  async probeSource(customUrl?: string): Promise<ProbeResult> {
     const start = Date.now();
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const targetUrl = customUrl || PROBE_URL;
 
     try {
-      const response = await fetch(PROBE_URL, {
+      const response = await fetch(targetUrl, {
         method: 'GET',
         signal: controller.signal,
         headers: BROWSER_HEADERS,
@@ -49,7 +50,6 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
       clearTimeout(timeoutId);
       const elapsed = Date.now() - start;
 
-      // Capturar headers relevantes
       const contentType = response.headers.get('content-type') ?? undefined;
       const serverHeader = response.headers.get('server') ?? undefined;
       const cfRay = response.headers.get('cf-ray') ?? undefined;
@@ -57,13 +57,11 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
       const headersMap: Record<string, string> = {};
       response.headers.forEach((value, key) => { headersMap[key] = value; });
 
-      // Ler body com limite de tamanho
       let html = '';
       let responseSize = 0;
       try {
         const buffer = await response.arrayBuffer();
         responseSize = buffer.byteLength;
-        // Decodificar apenas os primeiros MAX_BODY_BYTES para diagnóstico
         const slice = buffer.byteLength > MAX_BODY_BYTES
           ? buffer.slice(0, MAX_BODY_BYTES)
           : buffer;
@@ -72,7 +70,6 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
         html = '';
       }
 
-      // Analisar o HTML
       const inspection = inspectHtml(html, response.status, headersMap);
 
       return {
@@ -123,8 +120,8 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
     }
   }
 
-  async runParser(): Promise<import('./types').ParseResult> {
-    const probe = await this.probeSource();
+  async runParser(customUrl?: string): Promise<import('./types').ParseResult> {
+    const probe = await this.probeSource(customUrl);
     if (!probe.reachable || !probe.statusCode) {
       return {
         provider: this.name,
@@ -136,13 +133,12 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
       };
     }
 
-    // O html não fica no ProbeResult por ser grande. Vamos buscar novamente (ou usar o probe apenas para diag).
-    // Para simplificar, fetchRaw.
+    const targetUrl = customUrl || PROBE_URL;
     let html = '';
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
-      const res = await fetch(PROBE_URL, {
+      const res = await fetch(targetUrl, {
         method: 'GET',
         signal: controller.signal,
         headers: BROWSER_HEADERS,
@@ -163,9 +159,6 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
     const { parseOddsAgora, inspectOddsAgoraHtml } = await import('../server/oddsAgoraParserService');
     const diag = inspectOddsAgoraHtml(html);
     
-    // Atualizar os diagnósticos no ProbeResult se tiver algo novo, 
-    // mas vamos usar o diag local para tomar decisão.
-    
     if (diag.extractionMode === 'js_rendered' || diag.extractionMode === 'api_endpoint' || diag.extractionMode === 'blocked' || diag.extractionMode === 'unknown') {
        return {
          provider: this.name,
@@ -173,12 +166,25 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
          extractionMode: diag.extractionMode,
          odds: [],
          diagnostics: probe,
-         warnings: ['Não foi possível extrair odds: ' + diag.extractionMode, ...diag.notes],
+         warnings: ['Não foi possível extrair odds diretamente: ' + diag.extractionMode, ...diag.notes],
        };
     }
 
     try {
       const odds = parseOddsAgora(html);
+      
+      // Se retornou 0 odds mesmo o extractionMode sendo html ou next_data, é no_data
+      if (odds.length === 0) {
+        return {
+          provider: this.name,
+          success: false, // Alterado para refletir a ausência de dados úteis
+          extractionMode: diag.extractionMode,
+          odds: [],
+          diagnostics: probe,
+          warnings: ['A fonte respondeu, mas esta URL não contém odds extraíveis com o parser atual.', ...diag.notes],
+        };
+      }
+
       return {
         provider: this.name,
         success: true,
@@ -197,6 +203,75 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
          warnings: ['Erro interno no parser: ' + String(err)],
        };
     }
+  }
+
+  // Novo: Etapa 5 — Discovery
+  async runDiscovery(maxUrls = 5): Promise<any> {
+    const start = Date.now();
+    let homeHtml = '';
+    
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      const res = await fetch(PROBE_URL, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: BROWSER_HEADERS,
+      });
+      clearTimeout(timeoutId);
+      homeHtml = await res.text();
+    } catch (err) {
+      return { success: false, error: 'Falha ao buscar a home para iniciar discovery' };
+    }
+
+    const { discoverCandidateUrls, rankOddsAgoraUrlInspection } = await import('../server/oddsAgoraDiscoveryService');
+    const { inspectOddsAgoraHtml } = await import('../server/oddsAgoraParserService');
+
+    const discovery = discoverCandidateUrls(homeHtml, PROBE_URL);
+    const urlsToInspect = discovery.prioritizedUrls.slice(0, maxUrls);
+    const inspectedRoutes = [];
+
+    for (const u of urlsToInspect) {
+      const reqStart = Date.now();
+      try {
+        const c = new AbortController();
+        const tid = setTimeout(() => c.abort(), TIMEOUT_MS);
+        const r = await fetch(u, {
+          method: 'GET',
+          signal: c.signal,
+          headers: BROWSER_HEADERS,
+        });
+        clearTimeout(tid);
+        const txt = await r.text();
+        const diag = inspectOddsAgoraHtml(txt);
+        const reqElapsed = Date.now() - reqStart;
+        
+        const ranked = rankOddsAgoraUrlInspection(u, r.status, reqElapsed, diag);
+        inspectedRoutes.push(ranked);
+        
+        // Rate limit simples (200ms)
+        await new Promise(res => setTimeout(res, 200));
+      } catch (err) {
+        inspectedRoutes.push({
+          url: u,
+          status: 0,
+          responseTimeMs: Date.now() - reqStart,
+          diagnostic: { extractionMode: 'not_available', notes: [String(err)] } as any,
+          score: -100,
+          ranking: 'not_useful'
+        });
+      }
+    }
+
+    // Ordenar por score DESC
+    inspectedRoutes.sort((a, b) => b.score - a.score);
+
+    return {
+      success: true,
+      timeMs: Date.now() - start,
+      discovery,
+      inspections: inspectedRoutes
+    };
   }
 }
 

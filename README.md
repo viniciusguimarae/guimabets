@@ -36,7 +36,12 @@ O **GuimaBets** é um painel web privado, moderno e minimalista para monitoramen
 - Diagnóstico profundo da resposta para identificar modelo de extração (`next_data`, `js_rendered`, `api_endpoint`, `html`).
 - Persistência das odds extraídas e normalizadas no Supabase usando a camada de banco de dados nativa.
 - Registro visual e de banco de dados para os logs de cada tentativa de extração.
-- Modo conservador de requests, respeitando limites e não usando proxy.
+### Etapa 5 — Mapeamento Real das Rotas do OddsAgora ✅
+- Arquitetura de Descoberta de URLs (Discovery Service).
+- Priorização baseada em Keywords sensíveis (ex: futebol, surebet).
+- Pontuação e Ranking de Rotas (Strong, Medium, Weak Candidate).
+- Customização de Testes pela UI (Inspeção de URL manual no painel).
+- Correção de feedback do Parser para status "Nenhum Dado" (`no_data`) em casos de esqueleto HTML vazio.
 
 ---
 

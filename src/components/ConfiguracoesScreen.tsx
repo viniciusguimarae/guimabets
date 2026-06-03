@@ -17,7 +17,8 @@ import {
   XCircle,
   AlertTriangle,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Search
 } from 'lucide-react';
 import { serverDataProvider, type ProbeResult } from '../lib/data/ServerDataProvider';
 
@@ -121,23 +122,36 @@ export default function ConfiguracoesScreen({
     }
   };
 
-  // Parser OddsAgora - Etapa 4
+  // Parser OddsAgora - Scraper Real Etapa 4 e 5
   const [parserLoading, setParserLoading] = useState<string | null>(null);
-  const [parserResult, setParserResult] = useState<any | null>(null);
+  const [parserResult, setParserResult] = useState<any>(null);
   const [parserError, setParserError] = useState<string | null>(null);
+  const [customUrl, setCustomUrl] = useState<string>('');
+  
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<any>(null);
 
-  const runOddsAgoraScraper = async (mode: 'diagnostic' | 'parse_and_save') => {
+  const runOddsAgoraScraper = async (mode: string) => {
+    if (!adminSecret) {
+      setParserError('Secret do admin obrigatório');
+      return;
+    }
     setParserLoading(mode);
     setParserResult(null);
     setParserError(null);
     try {
+      const payload: any = { mode };
+      if (customUrl.trim().length > 0) {
+        payload.url = customUrl.trim();
+      }
+
       const res = await fetch('/api/scraper/oddsagora/run', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-admin-secret': adminSecret,
         },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -148,6 +162,35 @@ export default function ConfiguracoesScreen({
       setParserError(String(err));
     } finally {
       setParserLoading(null);
+    }
+  };
+
+  const runOddsAgoraDiscovery = async () => {
+    if (!adminSecret) {
+      setParserError('Secret do admin obrigatório');
+      return;
+    }
+    setDiscoveryLoading(true);
+    setDiscoveryResult(null);
+    setParserError(null);
+    try {
+      const res = await fetch('/api/scraper/oddsagora/discover', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': adminSecret,
+        },
+        body: JSON.stringify({ maxUrls: 10 }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro na requisição');
+      }
+      setDiscoveryResult(data);
+    } catch (err) {
+      setParserError(String(err));
+    } finally {
+      setDiscoveryLoading(false);
     }
   };
 
@@ -859,43 +902,119 @@ export default function ConfiguracoesScreen({
         )}
       </div>
 
-      {/* Painel de Scraper Real — Etapa 4 */}
+      {/* Painel de Scraper Real — Etapa 4 e 5 */}
       <div className="bg-[#080808] border border-[#1a1a1a] rounded-lg p-5 space-y-5">
         <div className="flex items-center gap-2">
           <Activity className="w-3.5 h-3.5 text-blue-400" />
           <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider font-space font-extrabold">Scraper Real (OddsAgora)</h2>
-          <span className="text-[8px] font-bold text-blue-500 border border-blue-500/20 bg-blue-500/5 px-2 py-0.5 rounded font-mono uppercase">Etapa 4</span>
+          <span className="text-[8px] font-bold text-blue-500 border border-blue-500/20 bg-blue-500/5 px-2 py-0.5 rounded font-mono uppercase">Etapa 4+5</span>
         </div>
 
         <p className="text-[10px] text-zinc-600 leading-relaxed">
-          Executa a lógica de extração no OddsAgora. Diagnóstico profundo verifica se os dados estão na página e o Parser tenta salvar os dados no Supabase.
+          Executa a lógica de extração no OddsAgora. Descubra rotas candidatas ou teste uma URL manualmente.
         </p>
 
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            type="button"
-            disabled={!!parserLoading}
-            onClick={() => runOddsAgoraScraper('diagnostic')}
-            className="flex items-center justify-center gap-2 p-3 bg-[#0a0a0a] border border-[#151515] hover:border-blue-500/20 hover:text-blue-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
-          >
-            {parserLoading === 'diagnostic' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
-            Diagnóstico Profundo
-          </button>
+        <div className="space-y-3 p-4 bg-[#0a0a0a] border border-[#151515] rounded">
+          <label className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">URL de teste do OddsAgora</label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={customUrl}
+              onChange={(e) => setCustomUrl(e.target.value)}
+              placeholder="https://oddsagora.com.br/futebol"
+              className="flex-1 bg-black border border-[#222] rounded px-3 py-2 text-xs text-zinc-300 focus:outline-none focus:border-blue-500/50"
+            />
+          </div>
           
-          <button
-            type="button"
-            disabled={!!parserLoading}
-            onClick={() => runOddsAgoraScraper('parse_and_save')}
-            className="flex items-center justify-center gap-2 p-3 bg-[#0a0a0a] border border-[#151515] hover:border-emerald-500/20 hover:text-emerald-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
-          >
-            {parserLoading === 'parse_and_save' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-            Rodar Parser
-          </button>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+            <button
+              type="button"
+              disabled={!!parserLoading || discoveryLoading}
+              onClick={() => runOddsAgoraScraper('diagnostic')}
+              className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-blue-500/20 hover:text-blue-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+            >
+              {parserLoading === 'diagnostic' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+              Diagnóstico Profundo
+            </button>
+            
+            <button
+              type="button"
+              disabled={!!parserLoading || discoveryLoading}
+              onClick={() => runOddsAgoraScraper('parse_and_save')}
+              className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-emerald-500/20 hover:text-emerald-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+            >
+              {parserLoading === 'parse_and_save' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+              Rodar Parser
+            </button>
+            
+            <button
+              type="button"
+              disabled={!!parserLoading || discoveryLoading}
+              onClick={runOddsAgoraDiscovery}
+              className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-amber-500/20 hover:text-amber-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+            >
+              {discoveryLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+              Descobrir URLs Internas
+            </button>
+          </div>
         </div>
-
         {parserError && (
           <div className="p-3 bg-red-500/5 border border-red-500/10 rounded text-[10px] text-red-400 font-mono">
             Erro: {parserError}
+          </div>
+        )}
+
+        {discoveryResult && discoveryResult.success && (
+          <div className="space-y-4 p-4 bg-[#0a0a0a] border border-[#151515] rounded">
+            <div className="flex items-center justify-between border-b border-[#151515] pb-2">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase">Rotas Descobertas e Rankeadas</span>
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-amber-500/10 text-amber-400">
+                {discoveryResult.inspections?.length || 0} Inspecionadas
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-[9px] font-mono text-zinc-400">
+                <thead className="bg-[#111] text-zinc-500 uppercase">
+                  <tr>
+                    <th className="px-3 py-2 font-bold">URL</th>
+                    <th className="px-3 py-2 font-bold">Ranking</th>
+                    <th className="px-3 py-2 font-bold">Score</th>
+                    <th className="px-3 py-2 font-bold">Modo</th>
+                    <th className="px-3 py-2 font-bold">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#151515]">
+                  {discoveryResult.inspections?.map((ins: any, idx: number) => (
+                    <tr key={idx} className="hover:bg-[#0c0c0c] transition-colors">
+                      <td className="px-3 py-2 truncate max-w-[200px]" title={ins.url}>{ins.url}</td>
+                      <td className="px-3 py-2">
+                        <span className={`px-1.5 py-0.5 rounded ${
+                          ins.ranking === 'strong_candidate' ? 'bg-emerald-500/10 text-emerald-400' :
+                          ins.ranking === 'medium_candidate' ? 'bg-blue-500/10 text-blue-400' :
+                          ins.ranking === 'weak_candidate' ? 'bg-amber-500/10 text-amber-400' :
+                          'bg-red-500/10 text-red-400'
+                        }`}>
+                          {ins.ranking}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2">{ins.score}</td>
+                      <td className="px-3 py-2">{ins.diagnostic?.extractionMode}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={() => {
+                            setCustomUrl(ins.url);
+                            runOddsAgoraScraper('diagnostic');
+                          }}
+                          className="px-2 py-1 bg-[#1a1a1a] hover:bg-[#252525] text-zinc-300 rounded mr-2"
+                        >
+                          Testar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
@@ -903,8 +1022,18 @@ export default function ConfiguracoesScreen({
           <div className="space-y-4 p-4 bg-[#0a0a0a] border border-[#151515] rounded">
             <div className="flex items-center justify-between border-b border-[#151515] pb-2">
               <span className="text-[10px] font-bold text-zinc-400 uppercase">Resultado do Scraper</span>
-              <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${parserResult.success ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
-                {parserResult.success ? 'SUCESSO' : 'FALHA PARCIAL'}
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+                parserResult.success 
+                  ? 'bg-emerald-500/10 text-emerald-400' 
+                  : (parserResult.oddsExtracted === 0 && (parserResult.extractionMode === 'html' || parserResult.extractionMode === 'next_data'))
+                    ? 'bg-amber-500/10 text-amber-400'
+                    : 'bg-red-500/10 text-red-400'
+              }`}>
+                {parserResult.success 
+                  ? 'SUCESSO' 
+                  : (parserResult.oddsExtracted === 0 && (parserResult.extractionMode === 'html' || parserResult.extractionMode === 'next_data'))
+                    ? 'SEM DADOS'
+                    : 'FALHA PARCIAL'}
               </span>
             </div>
 

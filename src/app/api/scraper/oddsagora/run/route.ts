@@ -11,10 +11,14 @@ export async function POST(req: Request) {
     }
 
     let mode = 'diagnostic';
+    let url: string | undefined;
     try {
       const body = await req.json();
       if (body.mode === 'parse_and_save') {
         mode = 'parse_and_save';
+      }
+      if (body.url) {
+        url = body.url;
       }
     } catch {
       // Ignorar, body opcional
@@ -22,29 +26,30 @@ export async function POST(req: Request) {
 
     const start = Date.now();
     let result;
+    let logStatus = 'failed';
 
     if (mode === 'diagnostic') {
-      const diag = await oddsAgoraProvider.probeSource();
+      const diag = await oddsAgoraProvider.probeSource(url);
       result = {
         success: diag.reachable,
         diagnostics: diag,
       };
+      logStatus = diag.reachable ? 'success' : 'failed';
     } else {
-      const parseResult = await oddsAgoraProvider.runParser();
+      const parseResult = await oddsAgoraProvider.runParser(url);
       let savedResult = null;
       
       if (parseResult.success && parseResult.odds.length > 0) {
         savedResult = await saveProviderOdds('oddsagora', parseResult.odds);
+        logStatus = 'success';
         
         // TODO: chamar recálculo?
-        // Como o Supabase Admin aqui não dispara recálculo fácil (depende de API route),
-        // O recálculo pode ser disparado depois. Ou podemos instanciar o lifecycle aqui.
         const supabase = getSupabaseAdmin();
         if (supabase) {
-          // Apenas um trigger básico para simular o recálculo via proxy.
-          // Na vida real, chamaríamos o lifecycleProvider.
-          // Fetch próprio endpoint interno se fosse necessário.
+          // Trigger básico simulado
         }
+      } else if (parseResult.extractionMode !== 'not_available' && parseResult.odds.length === 0) {
+        logStatus = 'no_data';
       }
 
       result = {
@@ -65,7 +70,7 @@ export async function POST(req: Request) {
       await supabase.from('provider_logs').insert({
         provider_name: 'oddsagora',
         action: mode,
-        status: result.success ? 'success' : 'failed',
+        status: logStatus,
         message: `Extraction mode: ${result.extractionMode || 'N/A'}. ${result.warnings?.join('; ') || ''}`,
         response_time_ms: Date.now() - start,
         response_size: result.diagnostics?.htmlSize || result.diagnostics?.responseSize || 0,
