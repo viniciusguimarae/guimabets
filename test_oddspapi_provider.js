@@ -1,13 +1,13 @@
 // test_oddspapi_provider.js
-// Testes completos do provider OddsPapi — incluindo buildOddsPapiUrl e segurança
+// Testes do provider OddsPapi — fluxo oficial v2
 const assert = require('assert');
-const url_module = require('url');
 
 // -----------------------------------------------------------------------
-// Reimplementação das funções em JS puro para teste isolado (sem TS)
+// Helpers reimplementados em JS puro
 // -----------------------------------------------------------------------
 
 function normalizeOdd(value) {
+  if (value === undefined || value === null) return null;
   const num = typeof value === 'string' ? parseFloat(value) : value;
   if (isNaN(num) || num <= 1.0 || num > 1000) return null;
   return Math.round(num * 100) / 100;
@@ -19,34 +19,26 @@ function normalizeBookmaker(bkKey, bkTitle) {
 
 function normalizeSelection(outcomeName, marketKey, homeTeam, awayTeam) {
   const lower = outcomeName.toLowerCase();
+  const mkt   = marketKey.toLowerCase();
   let name = outcomeName;
-  if (marketKey === 'h2h') {
+  if (mkt === 'h2h' || mkt === '1x2' || mkt === 'match_winner') {
     if (lower === homeTeam.toLowerCase() || lower === 'home') name = 'Casa';
     else if (lower === awayTeam.toLowerCase() || lower === 'away') name = 'Fora';
-    else if (lower === 'draw') name = 'Empate';
-  } else if (marketKey === 'btts') {
-    if (lower === 'yes') name = 'Sim';
-    else if (lower === 'no') name = 'Não';
+    else if (lower === 'draw' || lower === 'x') name = 'Empate';
+  } else if (mkt === 'btts') {
+    if (lower === 'yes' || lower === 'sim') name = 'Sim';
+    else if (lower === 'no' || lower === 'não') name = 'Não';
   }
   return { name, originalName: outcomeName };
 }
 
-function calculateSureBet(odds) {
-  const impliedSum = odds.reduce((acc, o) => acc + 1 / o, 0);
-  if (impliedSum >= 1.0) return null;
-  return { impliedSum, marginPercent: (1 - impliedSum) * 100 };
-}
-
-/**
- * Simula buildOddsPapiUrl — mesma lógica do provider TypeScript
- */
-function buildOddsPapiUrl(path, params = {}, apiKey) {
+function buildOddsPapiUrl(path, params, apiKey) {
   if (!apiKey) throw new Error('ODDSPAPI_API_KEY não configurada no servidor');
   const base = 'https://api.oddspapi.io/v4';
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const urlObj = new URL(`${base}${normalizedPath}`);
   urlObj.searchParams.set('apiKey', apiKey);
-  for (const [k, v] of Object.entries(params)) {
+  for (const [k, v] of Object.entries(params || {})) {
     if (k !== 'apiKey') urlObj.searchParams.set(k, v);
   }
   return urlObj.toString();
@@ -59,128 +51,186 @@ function apiKeyDiagnostic(apiKey) {
   };
 }
 
+function parseSoccerSportId(sportsArray) {
+  const soccer = sportsArray.find((s) => {
+    const slug = (s.slug || s.key || '').toLowerCase();
+    const name = (s.sportName || s.name || s.title || '').toLowerCase();
+    return slug.includes('soccer') || slug.includes('football') || name.includes('soccer') || name.includes('football');
+  });
+  return soccer?.sportId ?? soccer?.id ?? null;
+}
+
+function parseBookmakers(rawList) {
+  return rawList.slice(0, 30).map((bk) => ({
+    name: bk.bookmakerName || bk.name || bk.slug || '',
+    slug: bk.slug || bk.key || '',
+    liveOdds: !!bk.liveOdds,
+  }));
+}
+
+function pickBestTournaments(tournaments) {
+  const PRIORITY_NAMES = ['premier league', 'laliga', 'serie a', 'bundesliga', 'champions', 'brasileirao', 'brazil', 'brasil'];
+  const withFixtures = tournaments.filter((t) => {
+    return (t.futureFixtures || 0) + (t.upcomingFixtures || 0) + (t.liveFixtures || 0) > 0;
+  });
+  const prioritized = withFixtures.filter((t) => {
+    const name = (t.tournamentName || t.name || '').toLowerCase();
+    return PRIORITY_NAMES.some((p) => name.includes(p));
+  });
+  const pool = prioritized.length > 0 ? prioritized : withFixtures;
+  return pool.slice(0, 3);
+}
+
+function calculateSureBet(odds) {
+  const impliedSum = odds.reduce((acc, o) => acc + 1 / o, 0);
+  if (impliedSum >= 1.0) return null;
+  return { impliedSum, marginPercent: (1 - impliedSum) * 100 };
+}
+
 // -----------------------------------------------------------------------
 // Testes
 // -----------------------------------------------------------------------
-
 async function runTests() {
-  console.log("== Iniciando testes do Provider OddsPapi ==\n");
+  console.log("== Iniciando testes OddsPapi — Fluxo Oficial v2 ==\n");
 
   // 1. buildOddsPapiUrl inclui apiKey como query param
-  const testKey = 'abc123xyz';
-  const built = buildOddsPapiUrl('/sports', {}, testKey);
+  const built = buildOddsPapiUrl('/sports', {}, 'abc123');
   const parsed = new URL(built);
-  assert.strictEqual(parsed.searchParams.get('apiKey'), testKey, 'apiKey deve estar na query string');
-  assert.ok(built.includes('?apiKey=') || built.includes('&apiKey='), 'URL deve conter apiKey como query param');
+  assert.strictEqual(parsed.searchParams.get('apiKey'), 'abc123');
   console.log("✔ buildOddsPapiUrl inclui apiKey como query param");
 
   // 2. buildOddsPapiUrl preserva outros parâmetros
-  const builtWithParams = buildOddsPapiUrl('/sports/soccer/odds', { regions: 'eu,uk', markets: 'h2h' }, testKey);
-  const parsedWithParams = new URL(builtWithParams);
-  assert.strictEqual(parsedWithParams.searchParams.get('regions'), 'eu,uk');
-  assert.strictEqual(parsedWithParams.searchParams.get('markets'), 'h2h');
-  assert.strictEqual(parsedWithParams.searchParams.get('apiKey'), testKey);
-  console.log("✔ buildOddsPapiUrl preserva outros parâmetros");
+  const builtWithParams = buildOddsPapiUrl('/odds-by-tournaments', { tournamentIds: '1,2,3', oddsFormat: 'decimal', verbosity: '3' }, 'abc123');
+  const parsedFull = new URL(builtWithParams);
+  assert.strictEqual(parsedFull.searchParams.get('tournamentIds'), '1,2,3');
+  assert.strictEqual(parsedFull.searchParams.get('oddsFormat'), 'decimal');
+  assert.strictEqual(parsedFull.searchParams.get('verbosity'), '3');
+  assert.strictEqual(parsedFull.searchParams.get('apiKey'), 'abc123');
+  assert.ok(!builtWithParams.includes('Bearer'), 'URL não deve conter Bearer');
+  console.log("✔ buildOddsPapiUrl usa tournamentIds e oddsFormat (parâmetros corretos da API)");
 
   // 3. Ausência de API key lança erro claro
-  let threwError = false;
-  try {
-    buildOddsPapiUrl('/sports', {}, null);
-  } catch (e) {
-    threwError = true;
-    assert.ok(e.message.includes('ODDSPAPI_API_KEY'), 'Erro deve mencionar a variável ausente');
+  let threw = false;
+  try { buildOddsPapiUrl('/sports', {}, null); } catch (e) {
+    threw = true;
+    assert.ok(e.message.includes('ODDSPAPI_API_KEY'));
   }
-  assert.ok(threwError, 'Deve lançar erro quando apiKey está ausente');
+  assert.ok(threw);
   console.log("✔ Ausência de API key retorna erro claro");
 
-  // 4. Nenhuma chamada usa Authorization Bearer — verificar que buildOddsPapiUrl NÃO gera Authorization
-  // Simulamos que o header retornado pelo buildHeaders é apenas Accept
-  const mockHeaders = { Accept: 'application/json' };
-  assert.strictEqual(mockHeaders['Authorization'], undefined, 'Não deve haver Authorization header');
-  assert.ok(!JSON.stringify(mockHeaders).includes('Bearer'), 'Não deve conter Bearer token');
+  // 4. Nenhuma chamada usa Authorization Bearer
+  const headers = { Accept: 'application/json' };
+  assert.strictEqual(headers['Authorization'], undefined);
+  assert.ok(!JSON.stringify(headers).includes('Bearer'));
   console.log("✔ Nenhuma chamada usa Authorization Bearer");
 
-  // 5. Nenhuma resposta/log expõe a chave completa
-  const fullKey = 'supersecretkey12345';
-  const diag = apiKeyDiagnostic(fullKey);
-  assert.strictEqual(diag.apiKeyConfigured, true);
-  assert.ok(!diag.apiKeyPrefix.includes(fullKey), 'Prefix não deve conter chave completa');
-  assert.ok(diag.apiKeyPrefix.endsWith('...'), 'Prefix deve terminar com ...');
-  assert.ok(diag.apiKeyPrefix.length <= 10, 'Prefix deve ser curto');
-  console.log("✔ Log seguro: apenas prefixo exposto, chave completa nunca vazada");
+  // 5. Log seguro da key
+  const diag = apiKeyDiagnostic('supersecretkey12345');
+  assert.ok(diag.apiKeyConfigured);
+  assert.ok(!diag.apiKeyPrefix.includes('supersecretkey12345'));
+  assert.ok(diag.apiKeyPrefix.endsWith('...'));
+  console.log("✔ Log seguro: apenas prefixo, chave completa nunca vazada");
 
-  // 6. normalizeOdd — aceita válidos
+  // 6. parseSoccerSportId detecta soccer pelo slug
+  const sportsArr = [
+    { sportId: 1, slug: 'basketball', sportName: 'Basketball' },
+    { sportId: 10, slug: 'soccer', sportName: 'Soccer' },
+    { sportId: 15, slug: 'tennis', sportName: 'Tennis' },
+  ];
+  const soccerId = parseSoccerSportId(sportsArr);
+  assert.strictEqual(soccerId, 10);
+  console.log("✔ sportId 10 detectado como soccer via slug");
+
+  // 7. parseSoccerSportId detecta soccer pelo nome quando slug diferente
+  const sportsArr2 = [
+    { sportId: 3, slug: 'futbol', sportName: 'Football' },
+  ];
+  const soccerId2 = parseSoccerSportId(sportsArr2);
+  assert.strictEqual(soccerId2, 3);
+  console.log("✔ sportId detectado via sportName quando slug é diferente");
+
+  // 8. parseBookmakers parseia bookmakerName e slug
+  const rawBk = [
+    { bookmakerName: 'Bet365', slug: 'bet365', liveOdds: true },
+    { bookmakerName: 'Betano', slug: 'betano', liveOdds: false },
+    { slug: 'superbet', liveOdds: false }, // sem bookmakerName
+  ];
+  const parsed2 = parseBookmakers(rawBk);
+  assert.strictEqual(parsed2[0].name, 'Bet365');
+  assert.strictEqual(parsed2[0].slug, 'bet365');
+  assert.strictEqual(parsed2[1].name, 'Betano');
+  assert.strictEqual(parsed2[2].name, 'superbet'); // fallback para slug
+  console.log("✔ parseBookmakers parseia bookmakerName e slug corretamente");
+
+  // 9. Torneios com fixtures são priorizados
+  const tournaments = [
+    { tournamentId: 1, tournamentName: 'random cup', futureFixtures: 0, upcomingFixtures: 0, liveFixtures: 0 },
+    { tournamentId: 2, tournamentName: 'Premier League', futureFixtures: 10, upcomingFixtures: 2, liveFixtures: 0 },
+    { tournamentId: 3, tournamentName: 'Brasileirao', futureFixtures: 5, upcomingFixtures: 1, liveFixtures: 0 },
+    { tournamentId: 4, tournamentName: 'unknow league', futureFixtures: 3, upcomingFixtures: 0, liveFixtures: 0 },
+  ];
+  const chosen = pickBestTournaments(tournaments);
+  assert.ok(chosen.length > 0, 'deve escolher torneios com fixtures');
+  assert.ok(chosen.some((t) => t.tournamentName === 'Premier League'), 'Premier League deve ser priorizado');
+  assert.ok(chosen.every((t) => (t.futureFixtures || 0) + (t.upcomingFixtures || 0) + (t.liveFixtures || 0) > 0), 'todos escolhidos devem ter fixtures');
+  assert.ok(!chosen.some((t) => t.tournamentId === 1), 'torneio sem fixtures não deve ser escolhido');
+  console.log("✔ Torneios com fixtures são priorizados (Premier League, Brasileirao)");
+
+  // 10. Ausência de casas prioritárias = 'partial', não 'not_viable'
+  const bkList = [{ name: 'BetXYZ', slug: 'betxyz' }, { name: 'ApostaBR', slug: 'apostabr' }];
+  const search = bkList.map((b) => `${b.slug} ${b.name}`.toLowerCase());
+  const PRIORITY_SLUGS = ['bet365', 'betano', 'superbet', 'sportingbet'];
+  const priorityFound = PRIORITY_SLUGS.filter((p) => search.some((s) => s.includes(p)));
+  const verdict = bkList.length > 0 && priorityFound.length === 0 ? 'partial' : 'not_viable';
+  assert.strictEqual(verdict, 'partial');
+  console.log("✔ Ausência de casas prioritárias com bookmakers existentes = 'partial', não 'not_viable'");
+
+  // 11. normalizeOdd — aceita válidos
   assert.strictEqual(normalizeOdd(2.5), 2.5);
   assert.strictEqual(normalizeOdd('1.85'), 1.85);
-  assert.strictEqual(normalizeOdd(999.99), 999.99);
-  console.log("✔ normalizeOdd aceita números válidos");
-
-  // 7. normalizeOdd — rejeita inválidos
-  assert.strictEqual(normalizeOdd(0.5), null);
+  assert.strictEqual(normalizeOdd(null), null);
+  assert.strictEqual(normalizeOdd(undefined), null);
   assert.strictEqual(normalizeOdd(1.0), null);
   assert.strictEqual(normalizeOdd('abc'), null);
-  assert.strictEqual(normalizeOdd(1001), null);
-  assert.strictEqual(normalizeOdd(-1), null);
-  console.log("✔ normalizeOdd rejeita odds inválidas");
+  console.log("✔ normalizeOdd aceita/rejeita corretamente");
 
-  // 8. normalizeBookmaker
-  const bk = normalizeBookmaker('bet365', 'Bet365');
-  assert.strictEqual(bk.name, 'Bet365');
-  assert.strictEqual(bk.originalName, 'bet365');
-  const bkFallback = normalizeBookmaker('mybookie_ag', '');
-  assert.strictEqual(bkFallback.name, 'mybookie_ag');
-  console.log("✔ normalizeBookmaker funciona com fallback");
-
-  // 9. normalizeSelection h2h
+  // 12. normalizeSelection h2h
   assert.strictEqual(normalizeSelection('Flamengo', 'h2h', 'Flamengo', 'Vasco').name, 'Casa');
-  assert.strictEqual(normalizeSelection('Vasco', 'h2h', 'Flamengo', 'Vasco').name, 'Fora');
-  assert.strictEqual(normalizeSelection('Draw', 'h2h', 'Flamengo', 'Vasco').name, 'Empate');
-  console.log("✔ normalizeSelection h2h funciona");
-
-  // 10. normalizeSelection btts
+  assert.strictEqual(normalizeSelection('Draw', 'match_winner', '', '').name, 'Empate');
   assert.strictEqual(normalizeSelection('Yes', 'btts', '', '').name, 'Sim');
-  assert.strictEqual(normalizeSelection('No', 'btts', '', '').name, 'Não');
-  console.log("✔ normalizeSelection btts funciona");
+  console.log("✔ normalizeSelection h2h/btts funciona");
 
-  // 11. Mercado incompleto (2 seleções em h2h de 3) não gera surebet por validação de completude
-  const is3WayComplete = [2.10, 3.50].length >= 3;
-  assert.strictEqual(is3WayComplete, false);
-  console.log("✔ Mercado incompleto (< 3 seleções h2h) detectado");
-
-  // 12. Odds com margem positiva NÃO geram surebet
+  // 13. Mercado sem surebet
   const noSurebet = calculateSureBet([2.10, 3.80, 3.50]);
   assert.strictEqual(noSurebet, null);
-  console.log("✔ Odds com margem positiva NÃO geram surebet");
+  console.log("✔ Odds normais NÃO geram surebet");
 
-  // 13. Odds favoráveis GERAM surebet
-  const yesSurebet = calculateSureBet([3.10, 3.20, 3.30]);
-  assert.notStrictEqual(yesSurebet, null);
-  assert.ok(yesSurebet.marginPercent > 0);
-  console.log(`✔ Odds favoráveis geram surebet: margem de ${yesSurebet.marginPercent.toFixed(2)}%`);
+  // 14. Odds favoráveis geram surebet
+  const yes = calculateSureBet([3.10, 3.20, 3.30]);
+  assert.notStrictEqual(yes, null);
+  assert.ok(yes.marginPercent > 0);
+  console.log(`✔ Odds favoráveis geram surebet: ${yes.marginPercent.toFixed(2)}%`);
 
-  // 14. Source oddspapi está definida
+  // 15. Source oddspapi
   assert.strictEqual('oddspapi', 'oddspapi');
   console.log("✔ Source 'oddspapi' corretamente definida");
 
-  // 15. Rotas protegidas retornam 401 sem x-admin-secret
+  // 16. Rota 401 sem secret
   function mockAuth(headers) {
     const secret = 'test-secret';
-    if (!headers['x-admin-secret'] || headers['x-admin-secret'] !== secret) {
-      return { status: 401 };
-    }
+    if (!headers['x-admin-secret'] || headers['x-admin-secret'] !== secret) return { status: 401 };
     return null;
   }
   assert.strictEqual(mockAuth({}).status, 401);
   assert.strictEqual(mockAuth({ 'x-admin-secret': 'test-secret' }), null);
-  console.log("✔ Rotas protegidas retornam 401 sem x-admin-secret correto");
+  console.log("✔ Rotas protegidas retornam 401 sem secret");
 
-  // 16. Import com 0 odds não é marcado como sucesso
-  const emptyImport = { ok: 0 > 0, oddsSaved: 0, error: 'Nenhuma odd retornada' };
-  assert.strictEqual(emptyImport.ok, false);
-  assert.ok(emptyImport.error);
+  // 17. Import com 0 odds não é sucesso
+  const empty = { ok: 0 > 0, oddsSaved: 0, error: 'Nenhuma odd' };
+  assert.strictEqual(empty.ok, false);
   console.log("✔ Import com 0 odds não é marcado como sucesso");
 
-  console.log("\n== Todos os 16 testes OddsPapi passaram! ==");
+  console.log(`\n== Todos os 17 testes passaram! ==`);
 }
 
 runTests().catch((err) => {

@@ -1172,6 +1172,8 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
   const [bookmakersResult, setBookmakersResult] = useState<any>(null);
   const [probeResult, setProbeResult] = useState<any>(null);
   const [importResult, setImportResult] = useState<any>(null);
+  const [debugResult, setDebugResult] = useState<any>(null);
+  const [showDebugRaw, setShowDebugRaw] = useState(false);
 
   const callOddsPapi = async (action: string, endpoint: string) => {
     const now = Date.now();
@@ -1222,6 +1224,12 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
     if (!window.confirm('Esta ação consome requisições da OddsPapi. Confirma o import?')) return;
     const data = await callOddsPapi('import', '/api/providers/oddspapi/import-football');
     if (data) setImportResult(data);
+  };
+
+  const runDebug = async () => {
+    if (!window.confirm('Debug Flow executa 4 chamadas à OddsPapi. Confirma?')) return;
+    const data = await callOddsPapi('debug', '/api/providers/oddspapi/debug-flow');
+    if (data) setDebugResult(data);
   };
 
   const isLoading = !!loading;
@@ -1289,6 +1297,14 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
         </button>
 
         <button type="button" disabled={isLoading}
+          onClick={runDebug}
+          className="flex items-center justify-center gap-2 p-3 bg-[#0a0a00] border border-amber-900/50 hover:border-amber-500/60 hover:bg-amber-900/10 text-amber-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+        >
+          {loading === 'debug' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+          Debug Flow
+        </button>
+
+        <button type="button" disabled={isLoading}
           onClick={runImport}
           className="flex items-center justify-center gap-2 p-3 bg-[#0a0005] border border-violet-900/50 hover:border-violet-500/80 hover:bg-violet-900/20 text-violet-400 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40 col-span-2 md:col-span-2"
         >
@@ -1320,27 +1336,42 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
       {bookmakersResult && (
         <div className="p-4 bg-[#0a0a0a] border border-[#151515] rounded space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">Bookmakers Detectados</p>
-            <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
-              bookmakersResult.verdict === 'viable' ? 'bg-emerald-500/10 text-emerald-400' :
-              bookmakersResult.verdict === 'partial' ? 'bg-amber-500/10 text-amber-400' :
-              'bg-red-500/10 text-red-400'
-            }`}>{bookmakersResult.verdict?.toUpperCase()}</span>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Bookmakers — /v4/bookmakers</p>
+            <div className="flex items-center gap-2">
+              <span className="text-[8px] text-zinc-600 font-mono">total bruto: {bookmakersResult.totalRaw}</span>
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+                bookmakersResult.verdict === 'viable' ? 'bg-emerald-500/10 text-emerald-400' :
+                bookmakersResult.verdict === 'partial' ? 'bg-amber-500/10 text-amber-400' :
+                'bg-red-500/10 text-red-400'
+              }`}>{bookmakersResult.verdict?.toUpperCase()}</span>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 text-[9px] font-mono">
+          {bookmakersResult.bookmakers?.length > 0 && (
+            <div className="mt-1">
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Disponíveis na conta (primeiros 30)</p>
+              <div className="flex flex-wrap gap-1">
+                {bookmakersResult.bookmakers.map((b: any, i: number) => (
+                  <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 bg-[#111] border border-[#222] rounded text-zinc-400" title={`slug: ${b.slug}`}>{b.name || b.slug}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3 text-[9px] font-mono mt-2">
             <div>
-              <p className="text-emerald-600 font-bold mb-1">Encontradas ({bookmakersResult.priorityFound?.length})</p>
+              <p className="text-emerald-600 font-bold mb-1">Prioritárias encontradas ({bookmakersResult.priorityFound?.length})</p>
               {bookmakersResult.priorityFound?.map((b: string, i: number) => (
                 <p key={i} className="text-emerald-400">✓ {b}</p>
               ))}
+              {bookmakersResult.priorityFound?.length === 0 && <p className="text-zinc-600">nenhuma encontrada</p>}
             </div>
             <div>
-              <p className="text-zinc-700 font-bold mb-1">Ausentes ({bookmakersResult.priorityMissing?.length})</p>
-              {bookmakersResult.priorityMissing?.map((b: string, i: number) => (
+              <p className="text-zinc-700 font-bold mb-1">Prioritárias ausentes ({bookmakersResult.priorityMissing?.length})</p>
+              {bookmakersResult.priorityMissing?.slice(0, 6).map((b: string, i: number) => (
                 <p key={i} className="text-zinc-600">✗ {b}</p>
               ))}
             </div>
           </div>
+          {bookmakersResult.error && <p className="text-[9px] text-red-400 font-mono">{bookmakersResult.error}</p>}
         </div>
       )}
 
@@ -1348,24 +1379,91 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
       {probeResult && (
         <div className="p-4 bg-[#0a0a0a] border border-[#151515] rounded space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">Probe Futebol</p>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Probe Futebol — Fluxo Oficial</p>
             <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
-              probeResult.technicalVerdict?.includes('viable') ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
+              probeResult.technicalVerdict === 'viable' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
             }`}>{probeResult.technicalVerdict}</span>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[9px] font-mono">
+            <div><p className="text-zinc-600">SportId</p><p className="text-zinc-300 font-bold">{probeResult.sportIdUsed ?? '—'}</p></div>
+            <div><p className="text-zinc-600">Torneios</p><p className="text-zinc-300 font-bold">{probeResult.tournamentsFound}</p></div>
             <div><p className="text-zinc-600">Eventos</p><p className="text-zinc-300 font-bold">{probeResult.eventsDetected}</p></div>
             <div><p className="text-zinc-600">Odds</p><p className="text-zinc-300 font-bold">{probeResult.oddsCount}</p></div>
-            <div><p className="text-zinc-600">Casas</p><p className="text-zinc-300 font-bold">{probeResult.bookmakersDetected?.length}</p></div>
-            <div><p className="text-zinc-600">Ligas</p><p className="text-zinc-300 font-bold">{probeResult.leaguesDetected?.length}</p></div>
+            <div><p className="text-zinc-600">Casas</p><p className="text-zinc-300 font-bold">{probeResult.bookmakersDetected?.length ?? 0}</p></div>
+            <div><p className="text-zinc-600">Mercados</p><p className="text-zinc-300 font-bold">{probeResult.marketsDetected?.length ?? 0}</p></div>
           </div>
-          {probeResult.sampleEvent && (
-            <div className="mt-2 pt-2 border-t border-[#151515]">
-              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Amostra</p>
-              <p className="text-[9px] text-zinc-400 font-mono">{probeResult.sampleEvent.homeTeam} x {probeResult.sampleEvent.awayTeam}</p>
-              <p className="text-[9px] text-zinc-600 font-mono">{probeResult.sampleEvent.sport} · {probeResult.sampleEvent.bookmakersCount} casas · mercados: {probeResult.sampleEvent.marketsAvailable?.join(', ')}</p>
+          {probeResult.tournamentsChosen?.length > 0 && (
+            <div className="mt-1">
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Torneios escolhidos para probe</p>
+              {probeResult.tournamentsChosen.map((t: any, i: number) => (
+                <p key={i} className="text-[9px] font-mono text-zinc-500">#{t.id} {t.name} · ↑{t.upcoming ?? 0} ⚡{t.live ?? 0} 📅{t.future ?? 0}</p>
+              ))}
             </div>
           )}
+          {probeResult.sampleEvent && (
+            <div className="mt-1 pt-2 border-t border-[#151515]">
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Amostra de Evento</p>
+              <p className="text-[9px] text-zinc-400 font-mono">{probeResult.sampleEvent.home} x {probeResult.sampleEvent.away}</p>
+              <p className="text-[9px] text-zinc-600 font-mono">{probeResult.sampleEvent.date} · {probeResult.sampleEvent.bkCount} casas</p>
+              <p className="text-[9px] text-zinc-600 font-mono">Keys: {probeResult.sampleEvent.topKeys?.join(', ')}</p>
+            </div>
+          )}
+          {probeResult.rawShape && Object.keys(probeResult.rawShape).length > 0 && (
+            <div className="mt-1 pt-2 border-t border-[#151515]">
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Shape da Resposta</p>
+              <p className="text-[9px] font-mono text-zinc-600">toplevel: [{probeResult.rawShape.topLevelKeys?.join(', ')}]</p>
+              <p className="text-[9px] font-mono text-zinc-600">fixture: [{probeResult.rawShape.sampleFixtureKeys?.join(', ')}]</p>
+              <p className="text-[9px] font-mono text-zinc-600">bk: [{probeResult.rawShape.sampleBkKeys?.join(', ')}]</p>
+              <p className="text-[9px] font-mono text-zinc-600">market: [{probeResult.rawShape.sampleMarketKeys?.join(', ')}]</p>
+            </div>
+          )}
+          {probeResult.error && <p className="text-[9px] text-red-400 font-mono mt-1">{probeResult.error}</p>}
+        </div>
+      )}
+
+      {/* Debug Flow result */}
+      {debugResult && (
+        <div className="p-4 bg-[#080800] border border-amber-900/30 rounded space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[9px] font-bold text-amber-500/70 uppercase">Debug Flow Completo</p>
+            <button onClick={() => setShowDebugRaw(!showDebugRaw)} className="text-[8px] text-zinc-600 hover:text-zinc-400 cursor-pointer">
+              {showDebugRaw ? 'Ocultar JSON' : 'Ver JSON completo'}
+            </button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-[9px] font-mono">
+            <div><p className="text-zinc-600">Sports retornados</p><p className="text-zinc-300">{debugResult.sports?.length ?? 0}</p></div>
+            <div><p className="text-zinc-600">SportId Soccer</p><p className="text-amber-400 font-bold">{debugResult.sportIdFound ?? '—'}</p></div>
+            <div><p className="text-zinc-600">Bookmakers</p><p className="text-zinc-300">{debugResult.bookmakers?.length ?? 0}</p></div>
+            <div><p className="text-zinc-600">Torneios</p><p className="text-zinc-300">{debugResult.tournaments?.length ?? 0}</p></div>
+            <div><p className="text-zinc-600">Escolhidos</p><p className="text-zinc-300">{debugResult.tournamentsChosen?.length ?? 0}</p></div>
+            <div><p className="text-zinc-600">Fixtures retornados</p><p className="text-amber-400 font-bold">{debugResult.oddsShape?.totalFixtures ?? '—'}</p></div>
+          </div>
+          {debugResult.bookmakers?.length > 0 && (
+            <div>
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Bookmakers disponíveis</p>
+              <div className="flex flex-wrap gap-1">
+                {debugResult.bookmakers.map((b: any, i: number) => (
+                  <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 bg-[#111] border border-[#222] rounded text-zinc-400">{b.name} ({b.slug})</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {debugResult.oddsShape?.sampleFixtureKeys?.length > 0 && (
+            <div>
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Shape da Fixture</p>
+              <p className="text-[9px] font-mono text-zinc-600">fixture: [{debugResult.oddsShape.sampleFixtureKeys?.join(', ')}]</p>
+              <p className="text-[9px] font-mono text-zinc-600">bk: [{debugResult.oddsShape.sampleBkKeys?.join(', ')}]</p>
+              <p className="text-[9px] font-mono text-zinc-600">market: [{debugResult.oddsShape.sampleMarketKeys?.join(', ')}]</p>
+              <p className="text-[9px] font-mono text-zinc-600">outcome: [{debugResult.oddsShape.sampleOutcomeKeys?.join(', ')}]</p>
+              {debugResult.oddsShape.sampleEvent && (
+                <p className="text-[9px] font-mono text-amber-400/80 mt-1">{debugResult.oddsShape.sampleEvent.home} x {debugResult.oddsShape.sampleEvent.away} — {debugResult.oddsShape.sampleEvent.date}</p>
+              )}
+            </div>
+          )}
+          {showDebugRaw && (
+            <pre className="text-[8px] text-zinc-600 font-mono bg-black p-3 rounded overflow-auto max-h-60 border border-[#1a1a1a]">{JSON.stringify(debugResult, null, 2)}</pre>
+          )}
+          {debugResult.error && <p className="text-[9px] text-red-400 font-mono">{debugResult.error}</p>}
         </div>
       )}
 

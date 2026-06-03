@@ -1,27 +1,38 @@
 // src/lib/providers/oddsPapiProvider.ts
-// Provider para OddsPapi — fonte de odds reais de futebol
-// Autenticação: query param apiKey (NÃO Authorization header)
+// Provider OddsPapi — fluxo oficial: /sports → /tournaments → /odds-by-tournaments
+// Autenticação: query param apiKey (NUNCA Authorization header)
 
 import type { ParsedOdd, ParsedEvent, ParsedMarket, ParsedSelection, ParsedBookmaker } from './types';
 
-const SPORT_FOOTBALL = 'soccer';
+// -----------------------------------------------------------------------
+// Constantes
+// -----------------------------------------------------------------------
+const SOCCER_SPORT_ID = 10;
 
-// Casas prioritárias para o mercado brasileiro
-const PRIORITY_BOOKMAKERS = [
-  'bet365', 'betano', 'superbet', 'sportingbet', 'estrelabet',
-  'kto', 'pixbet', 'betfair', 'novibet', 'esportes da sorte',
-  'betfair exchange',
+// Casas prioritárias (busca flexível via slug/name)
+const PRIORITY_SLUGS = [
+  'bet365', 'betano', 'superbet', 'sportingbet', 'estrela', 'estrelabet',
+  'kto', 'pixbet', 'betfair', 'novibet', 'esportes', 'esporte', 'betfair-exchange',
+];
+
+// Torneios prioritários para probe (por nome parcial em lowercase)
+const PRIORITY_TOURNAMENT_NAMES = [
+  'premier league', 'laliga', 'la liga', 'serie a', 'bundesliga',
+  'champions league', 'brasileirao', 'brazil', 'brasil',
 ];
 
 // Mercados aceitos nesta versão
-const ACCEPTED_MARKETS = ['h2h', 'totals', 'btts', 'spreads'];
+const ACCEPTED_MARKETS = ['h2h', 'totals', 'btts', 'spreads', '1x2', 'match_winner', 'winner'];
 
 // Mapeamento de mercados OddsPapi → GuimaBets
 const MARKET_MAP: Record<string, { type: string; name: string }> = {
-  h2h:     { type: '1X2',       name: 'Resultado Final (1X2)' },
-  totals:  { type: 'OVER_UNDER', name: 'Total de Gols (Over/Under)' },
-  btts:    { type: 'BTTS',       name: 'Ambas as Equipes Marcam' },
-  spreads: { type: 'HANDICAP',   name: 'Handicap Asiático' },
+  h2h:          { type: '1X2',        name: 'Resultado Final (1X2)' },
+  '1x2':        { type: '1X2',        name: 'Resultado Final (1X2)' },
+  match_winner: { type: '1X2',        name: 'Resultado Final (1X2)' },
+  winner:       { type: '1X2',        name: 'Resultado Final (1X2)' },
+  totals:       { type: 'OVER_UNDER', name: 'Total de Gols (Over/Under)' },
+  btts:         { type: 'BTTS',       name: 'Ambas as Equipes Marcam' },
+  spreads:      { type: 'HANDICAP',   name: 'Handicap Asiático' },
 };
 
 // -----------------------------------------------------------------------
@@ -37,46 +48,25 @@ function getApiKey(): string | null {
 }
 
 /**
- * Constrói a URL final com apiKey como query param.
- * Nunca usa Authorization header — a OddsPapi exige apiKey na query string.
- *
- * @param path   Caminho relativo, ex: "/sports" ou "/sports/soccer/odds"
- * @param params Outros query params adicionais (sem apiKey)
+ * Constrói URL com apiKey como query param — NUNCA via Authorization header.
  */
 export function buildOddsPapiUrl(path: string, params: Record<string, string> = {}): string {
   const key = getApiKey();
-  if (!key) {
-    throw new Error('ODDSPAPI_API_KEY não configurada no servidor');
-  }
-
+  if (!key) throw new Error('ODDSPAPI_API_KEY não configurada no servidor');
   const base = getBaseUrl();
-  // Garante que path começa com /
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const url = new URL(`${base}${normalizedPath}`);
-
-  // Adiciona apiKey SEMPRE como query param
   url.searchParams.set('apiKey', key);
-
-  // Adiciona outros params preservando-os
   for (const [k, v] of Object.entries(params)) {
-    if (k !== 'apiKey') { // nunca sobrescrever apiKey via params externos
-      url.searchParams.set(k, v);
-    }
+    if (k !== 'apiKey') url.searchParams.set(k, v);
   }
-
   return url.toString();
 }
 
-/**
- * Headers simples sem autenticação (apiKey vai na query string)
- */
 function buildHeaders(): HeadersInit {
   return { Accept: 'application/json' };
 }
 
-/**
- * Log seguro: mostra apenas se a key existe e os 4 primeiros caracteres
- */
 export function apiKeyDiagnostic(): { apiKeyConfigured: boolean; apiKeyPrefix: string } {
   const key = getApiKey();
   return {
@@ -85,75 +75,59 @@ export function apiKeyDiagnostic(): { apiKeyConfigured: boolean; apiKeyPrefix: s
   };
 }
 
-// -----------------------------------------------------------------------
-// testConnection — testa se a API key é válida
-// -----------------------------------------------------------------------
-export async function testConnection(): Promise<{
-  ok: boolean;
-  status: number;
-  responseTimeMs: number;
-  apiKeyConfigured: boolean;
-  apiKeyPrefix: string;
-  error?: string;
-  requestsUsed?: number;
-  requestsRemaining?: number;
-}> {
-  const start = Date.now();
-  const diag = apiKeyDiagnostic();
-
-  if (!diag.apiKeyConfigured) {
-    return {
-      ok: false,
-      status: 0,
-      responseTimeMs: 0,
-      ...diag,
-      error: 'ODDSPAPI_API_KEY não configurada no servidor',
-    };
-  }
-
+async function safeFetch(url: string, timeoutMs = 15000): Promise<{ ok: boolean; status: number; data: any; rawText: string }> {
   try {
-    const url = buildOddsPapiUrl('/sports');
-    const res = await fetch(url, {
-      headers: buildHeaders(),
-      signal: AbortSignal.timeout(10000),
-    });
-
-    const timeMs = Date.now() - start;
-    const requestsUsed      = parseInt(res.headers.get('x-requests-used')      || '0') || undefined;
-    const requestsRemaining = parseInt(res.headers.get('x-requests-remaining') || '0') || undefined;
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      let friendlyError = `HTTP ${res.status}: ${body.substring(0, 300)}`;
-
-      // Detectar erro de chave ausente na API
-      if (body.includes('MISSING_API_KEY') || body.includes('Missing API key')) {
-        friendlyError =
-          'A chave não foi enviada corretamente para a OddsPapi. Verifique provider/buildOddsPapiUrl.';
-      }
-
-      return { ok: false, status: res.status, responseTimeMs: timeMs, ...diag, error: friendlyError, requestsUsed, requestsRemaining };
-    }
-
-    return { ok: true, status: res.status, responseTimeMs: timeMs, ...diag, requestsUsed, requestsRemaining };
+    const res = await fetch(url, { headers: buildHeaders(), signal: AbortSignal.timeout(timeoutMs) });
+    const rawText = await res.text();
+    let data: any = null;
+    try { data = JSON.parse(rawText); } catch { data = null; }
+    return { ok: res.ok, status: res.status, data, rawText };
   } catch (err) {
-    return {
-      ok: false,
-      status: 0,
-      responseTimeMs: Date.now() - start,
-      ...diag,
-      error: String(err),
-    };
+    return { ok: false, status: 0, data: null, rawText: String(err) };
   }
 }
 
 // -----------------------------------------------------------------------
-// listBookmakers — lista bookmakers disponíveis na conta
+// testConnection
+// -----------------------------------------------------------------------
+export async function testConnection(): Promise<{
+  ok: boolean; status: number; responseTimeMs: number;
+  apiKeyConfigured: boolean; apiKeyPrefix: string;
+  error?: string; requestsUsed?: number; requestsRemaining?: number;
+}> {
+  const start = Date.now();
+  const diag = apiKeyDiagnostic();
+  if (!diag.apiKeyConfigured) {
+    return { ok: false, status: 0, responseTimeMs: 0, ...diag, error: 'ODDSPAPI_API_KEY não configurada no servidor' };
+  }
+  try {
+    const url = buildOddsPapiUrl('/sports');
+    const res = await fetch(url, { headers: buildHeaders(), signal: AbortSignal.timeout(10000) });
+    const timeMs = Date.now() - start;
+    const requestsUsed      = parseInt(res.headers.get('x-requests-used')      || '0') || undefined;
+    const requestsRemaining = parseInt(res.headers.get('x-requests-remaining') || '0') || undefined;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      let friendlyError = `HTTP ${res.status}: ${body.substring(0, 300)}`;
+      if (body.includes('MISSING_API_KEY') || body.includes('Missing API key')) {
+        friendlyError = 'A chave não foi enviada corretamente para a OddsPapi. Verifique buildOddsPapiUrl.';
+      }
+      return { ok: false, status: res.status, responseTimeMs: timeMs, ...diag, error: friendlyError, requestsUsed, requestsRemaining };
+    }
+    return { ok: true, status: res.status, responseTimeMs: timeMs, ...diag, requestsUsed, requestsRemaining };
+  } catch (err) {
+    return { ok: false, status: 0, responseTimeMs: Date.now() - start, ...diag, error: String(err) };
+  }
+}
+
+// -----------------------------------------------------------------------
+// listBookmakers — GET /v4/bookmakers
+// Retorna bookmakerName + slug; busca flexível por casas prioritárias
 // -----------------------------------------------------------------------
 export async function listBookmakers(): Promise<{
   ok: boolean;
-  total: number;
-  bookmakers: string[];
+  totalRaw: number;
+  bookmakers: Array<{ name: string; slug: string; liveOdds: boolean }>;
   priorityFound: string[];
   priorityMissing: string[];
   verdict: 'viable' | 'partial' | 'not_viable';
@@ -161,177 +135,392 @@ export async function listBookmakers(): Promise<{
 }> {
   if (!getApiKey()) {
     return {
-      ok: false, total: 0, bookmakers: [],
-      priorityFound: [], priorityMissing: PRIORITY_BOOKMAKERS,
+      ok: false, totalRaw: 0, bookmakers: [],
+      priorityFound: [], priorityMissing: PRIORITY_SLUGS,
       verdict: 'not_viable',
       error: 'ODDSPAPI_API_KEY não configurada no servidor',
     };
   }
 
   try {
-    const url = buildOddsPapiUrl(`/sports/${SPORT_FOOTBALL}/odds`, {
-      regions: 'eu,uk,us,au',
-      markets: 'h2h',
-    });
+    const url = buildOddsPapiUrl('/bookmakers');
+    const { ok, status, data } = await safeFetch(url);
 
-    const res = await fetch(url, {
-      headers: buildHeaders(),
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
+    if (!ok) {
       return {
-        ok: false, total: 0, bookmakers: [],
-        priorityFound: [], priorityMissing: PRIORITY_BOOKMAKERS,
+        ok: false, totalRaw: 0, bookmakers: [],
+        priorityFound: [], priorityMissing: PRIORITY_SLUGS,
         verdict: 'not_viable',
-        error: `HTTP ${res.status}: ${body.substring(0, 300)}`,
+        error: `HTTP ${status} em /bookmakers`,
       };
     }
 
-    const data = await res.json();
-    const events = Array.isArray(data) ? data : [];
+    // A resposta pode ser array direto ou ter wrapper { data: [...] }
+    const rawList: any[] = Array.isArray(data) ? data : (data?.data ?? data?.bookmakers ?? []);
+    const totalRaw = rawList.length;
 
-    // Coletar nomes únicos de bookmakers
-    const bookmakerSet = new Set<string>();
-    for (const event of events) {
-      for (const bk of (event.bookmakers || [])) {
-        bookmakerSet.add(bk.title || bk.key || '');
-      }
-    }
+    const bookmakers = rawList.slice(0, 100).map((bk: any) => ({
+      name:     bk.bookmakerName || bk.name || bk.title || bk.slug || '',
+      slug:     bk.slug || bk.key || '',
+      liveOdds: !!bk.liveOdds,
+    })).filter((b) => b.name || b.slug);
 
-    const bookmakers     = Array.from(bookmakerSet).filter(Boolean);
-    const bkLower        = bookmakers.map((b) => b.toLowerCase());
-    const priorityFound  = PRIORITY_BOOKMAKERS.filter((p) => bkLower.some((b) => b.includes(p.toLowerCase())));
-    const priorityMissing = PRIORITY_BOOKMAKERS.filter((p) => !bkLower.some((b) => b.includes(p.toLowerCase())));
+    // Busca flexível: slug + name em lowercase
+    const search = bookmakers.map((b) => `${b.slug} ${b.name}`.toLowerCase());
+
+    const priorityFound   = PRIORITY_SLUGS.filter((p) => search.some((s) => s.includes(p)));
+    const priorityMissing = PRIORITY_SLUGS.filter((p) => !search.some((s) => s.includes(p)));
+
     const verdict: 'viable' | 'partial' | 'not_viable' =
       priorityFound.length >= 3 ? 'viable' :
-      priorityFound.length >= 1 ? 'partial' : 'not_viable';
+      priorityFound.length >= 1 ? 'partial' :
+      totalRaw > 0              ? 'partial' : // tem casas, mas nenhuma prioritária => parcial
+      'not_viable';
 
-    return { ok: true, total: bookmakers.length, bookmakers, priorityFound, priorityMissing, verdict };
+    return { ok: true, totalRaw, bookmakers: bookmakers.slice(0, 30), priorityFound, priorityMissing, verdict };
   } catch (err) {
     return {
-      ok: false, total: 0, bookmakers: [],
-      priorityFound: [], priorityMissing: PRIORITY_BOOKMAKERS,
-      verdict: 'not_viable',
-      error: String(err),
+      ok: false, totalRaw: 0, bookmakers: [],
+      priorityFound: [], priorityMissing: PRIORITY_SLUGS,
+      verdict: 'not_viable', error: String(err),
     };
   }
 }
 
 // -----------------------------------------------------------------------
-// footballProbe — proba diagnóstica sem salvar no Supabase
+// getSoccerSportId — confirma o sportId correto do soccer na API
+// -----------------------------------------------------------------------
+async function getSoccerSportId(): Promise<{ sportId: number | null; sports: any[] }> {
+  try {
+    const url = buildOddsPapiUrl('/sports');
+    const { ok, data } = await safeFetch(url);
+    if (!ok) return { sportId: null, sports: [] };
+
+    const list: any[] = Array.isArray(data) ? data : (data?.data ?? data?.sports ?? []);
+
+    // Procura soccer por slug ou nome
+    const soccer = list.find((s: any) => {
+      const slug = (s.slug || s.key || '').toLowerCase();
+      const name = (s.sportName || s.name || s.title || '').toLowerCase();
+      return slug.includes('soccer') || slug.includes('football') || name.includes('soccer') || name.includes('football');
+    });
+
+    const sportId = soccer?.sportId ?? soccer?.id ?? soccer?.sport_id ?? SOCCER_SPORT_ID;
+    return { sportId: typeof sportId === 'number' ? sportId : parseInt(String(sportId)) || SOCCER_SPORT_ID, sports: list };
+  } catch {
+    return { sportId: SOCCER_SPORT_ID, sports: [] };
+  }
+}
+
+// -----------------------------------------------------------------------
+// getSoccerTournaments — GET /v4/tournaments?sportId=...
+// -----------------------------------------------------------------------
+async function getSoccerTournaments(sportId: number): Promise<{ tournaments: any[]; rawCount: number }> {
+  try {
+    const url = buildOddsPapiUrl('/tournaments', { sportId: String(sportId) });
+    const { ok, data } = await safeFetch(url);
+    if (!ok) return { tournaments: [], rawCount: 0 };
+
+    const list: any[] = Array.isArray(data) ? data : (data?.data ?? data?.tournaments ?? []);
+    return { tournaments: list, rawCount: list.length };
+  } catch {
+    return { tournaments: [], rawCount: 0 };
+  }
+}
+
+// -----------------------------------------------------------------------
+// pickBestTournaments — escolhe até 3 torneios com fixtures
+// -----------------------------------------------------------------------
+function pickBestTournaments(tournaments: any[]): any[] {
+  // Filtrar torneios com fixtures disponíveis
+  const withFixtures = tournaments.filter((t: any) => {
+    const future   = t.futureFixtures   || t.future_fixtures   || 0;
+    const upcoming = t.upcomingFixtures || t.upcoming_fixtures || 0;
+    const live     = t.liveFixtures     || t.live_fixtures     || 0;
+    return (future + upcoming + live) > 0;
+  });
+
+  // Priorizar torneios conhecidos
+  const prioritized = withFixtures.filter((t: any) => {
+    const name = (t.tournamentName || t.name || t.title || '').toLowerCase();
+    return PRIORITY_TOURNAMENT_NAMES.some((p) => name.includes(p));
+  });
+
+  const pool = prioritized.length > 0 ? prioritized : withFixtures;
+
+  // Ordenar por total de fixtures decrescente
+  pool.sort((a, b) => {
+    const totalA = (a.futureFixtures || 0) + (a.upcomingFixtures || 0) + (a.liveFixtures || 0);
+    const totalB = (b.futureFixtures || 0) + (b.upcomingFixtures || 0) + (b.liveFixtures || 0);
+    return totalB - totalA;
+  });
+
+  return pool.slice(0, 3);
+}
+
+// -----------------------------------------------------------------------
+// footballProbe — fluxo completo sem salvar no Supabase
 // -----------------------------------------------------------------------
 export async function footballProbe(): Promise<{
   ok: boolean;
+  sportsFound: any[];
+  sportIdUsed: number | null;
+  tournamentsFound: number;
+  tournamentsChosen: any[];
   eventsDetected: number;
-  leaguesDetected: string[];
-  marketsDetected: string[];
   bookmakersDetected: string[];
+  marketsDetected: string[];
   oddsCount: number;
   sampleEvent?: any;
-  structureSummary: Record<string, unknown>;
-  marketVerdicts: Record<string, boolean>;
+  rawShape: Record<string, unknown>;
   technicalVerdict: string;
   error?: string;
 }> {
   if (!getApiKey()) {
     return {
-      ok: false, eventsDetected: 0, leaguesDetected: [], marketsDetected: [],
-      bookmakersDetected: [], oddsCount: 0, structureSummary: {},
-      marketVerdicts: {}, technicalVerdict: 'no_api_key',
+      ok: false, sportsFound: [], sportIdUsed: null, tournamentsFound: 0,
+      tournamentsChosen: [], eventsDetected: 0, bookmakersDetected: [],
+      marketsDetected: [], oddsCount: 0, rawShape: {},
+      technicalVerdict: 'no_api_key',
       error: 'ODDSPAPI_API_KEY não configurada no servidor',
     };
   }
 
   try {
-    const url = buildOddsPapiUrl(`/sports/${SPORT_FOOTBALL}/odds`, {
-      regions: 'eu,uk',
-      markets: 'h2h,totals,btts',
-    });
+    // A) Confirmar sportId do soccer
+    const { sportId, sports } = await getSoccerSportId();
+    const usedSportId = sportId ?? SOCCER_SPORT_ID;
 
-    const res = await fetch(url, {
-      headers: buildHeaders(),
-      signal: AbortSignal.timeout(20000),
-    });
+    // B) Buscar torneios de futebol
+    const { tournaments, rawCount } = await getSoccerTournaments(usedSportId);
 
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
+    // C) Escolher torneios para probe
+    const chosen = pickBestTournaments(tournaments);
+    const tournamentIds = chosen
+      .map((t: any) => t.tournamentId ?? t.id ?? t.tournament_id)
+      .filter(Boolean)
+      .map(String);
+
+    if (tournamentIds.length === 0) {
       return {
-        ok: false, eventsDetected: 0, leaguesDetected: [], marketsDetected: [],
-        bookmakersDetected: [], oddsCount: 0, structureSummary: {},
-        marketVerdicts: {}, technicalVerdict: 'error',
-        error: `HTTP ${res.status}: ${body.substring(0, 300)}`,
+        ok: true, sportsFound: sports.slice(0, 10), sportIdUsed: usedSportId,
+        tournamentsFound: rawCount, tournamentsChosen: chosen,
+        eventsDetected: 0, bookmakersDetected: [], marketsDetected: [],
+        oddsCount: 0, rawShape: { sampleTournament: tournaments[0] ?? null },
+        technicalVerdict: 'no_tournaments_with_fixtures',
       };
     }
 
-    const data   = await res.json();
-    const events = Array.isArray(data) ? data : [];
+    // D) Buscar odds pelos torneios escolhidos (sem bookmakers fixos — ver todos disponíveis)
+    const oddsUrl = buildOddsPapiUrl('/odds-by-tournaments', {
+      tournamentIds: tournamentIds.join(','),
+      oddsFormat:    'decimal',
+      verbosity:     '3',
+    });
 
-    const leagueSet = new Set<string>();
-    const marketSet = new Set<string>();
+    const { ok: oddsOk, status: oddsStatus, data: oddsData, rawText } = await safeFetch(oddsUrl, 25000);
+
+    if (!oddsOk) {
+      return {
+        ok: false, sportsFound: sports.slice(0, 10), sportIdUsed: usedSportId,
+        tournamentsFound: rawCount, tournamentsChosen: chosen,
+        eventsDetected: 0, bookmakersDetected: [], marketsDetected: [],
+        oddsCount: 0, rawShape: {},
+        technicalVerdict: 'odds_endpoint_error',
+        error: `HTTP ${oddsStatus} em /odds-by-tournaments: ${rawText.substring(0, 300)}`,
+      };
+    }
+
+    // E) Extrair dados da resposta
+    const fixtures: any[] = Array.isArray(oddsData)
+      ? oddsData
+      : (oddsData?.data ?? oddsData?.fixtures ?? oddsData?.events ?? oddsData?.results ?? []);
+
     const bkSet     = new Set<string>();
+    const marketSet = new Set<string>();
     let oddsCount   = 0;
 
-    for (const ev of events) {
-      leagueSet.add(ev.sport_title || ev.league || '');
-      for (const bk of (ev.bookmakers || [])) {
-        bkSet.add(bk.title || bk.key || '');
-        for (const market of (bk.markets || [])) {
-          marketSet.add(market.key || '');
-          oddsCount += (market.outcomes || []).length;
+    for (const fixture of fixtures) {
+      // Bookmakers podem estar em bookmakerOdds, bookmakers, odds
+      const bkList: any[] = fixture.bookmakerOdds ?? fixture.bookmakers ?? fixture.odds ?? [];
+      for (const bk of bkList) {
+        const bkName = bk.bookmakerName || bk.bookmaker || bk.name || bk.slug || '';
+        if (bkName) bkSet.add(bkName);
+        const markets: any[] = bk.markets ?? bk.odds ?? bk.market ?? [];
+        for (const mkt of markets) {
+          const mktName = mkt.marketName || mkt.market || mkt.key || mkt.name || '';
+          if (mktName) marketSet.add(mktName);
+          const outcomes: any[] = mkt.outcomes ?? mkt.selections ?? mkt.odds ?? [];
+          oddsCount += outcomes.length;
         }
       }
     }
 
-    const sampleEvent = events[0] ? {
-      id:              events[0].id,
-      sport:           events[0].sport_title,
-      homeTeam:        events[0].home_team,
-      awayTeam:        events[0].away_team,
-      startTime:       events[0].commence_time,
-      bookmakersCount: (events[0].bookmakers || []).length,
-      marketsAvailable: (events[0].bookmakers?.[0]?.markets || []).map((m: any) => m.key),
+    const sampleRaw = fixtures[0];
+    const sampleEvent = sampleRaw ? {
+      id:       sampleRaw.fixtureId ?? sampleRaw.id ?? sampleRaw.fixture_id,
+      home:     sampleRaw.homeTeam ?? sampleRaw.home_team ?? sampleRaw.home ?? '',
+      away:     sampleRaw.awayTeam ?? sampleRaw.away_team ?? sampleRaw.away ?? '',
+      date:     sampleRaw.startDate ?? sampleRaw.commence_time ?? sampleRaw.date ?? '',
+      bkCount:  Array.isArray(sampleRaw.bookmakerOdds ?? sampleRaw.bookmakers ?? sampleRaw.odds ?? [])
+                  ? (sampleRaw.bookmakerOdds ?? sampleRaw.bookmakers ?? sampleRaw.odds ?? []).length : 0,
+      topKeys:  sampleRaw ? Object.keys(sampleRaw).slice(0, 12) : [],
     } : undefined;
 
-    const marketVerdicts: Record<string, boolean> = {
-      '1X2 (h2h)':           marketSet.has('h2h'),
-      'Over/Under (totals)': marketSet.has('totals'),
-      'Ambas Marcam (btts)': marketSet.has('btts'),
-      'Handicap (spreads)':  marketSet.has('spreads'),
-    };
-
-    const viableMarkets   = Object.values(marketVerdicts).filter(Boolean).length;
     const technicalVerdict =
-      events.length === 0    ? 'no_events_returned' :
-      viableMarkets === 0    ? 'no_viable_markets' :
-      viableMarkets >= 2     ? 'viable_multiple_markets' : 'viable_partial_markets';
+      fixtures.length === 0 ? 'no_fixtures_returned' :
+      oddsCount === 0       ? 'fixtures_but_no_odds' :
+      bkSet.size === 0      ? 'odds_but_no_bookmakers_parsed' :
+      'viable';
 
     return {
       ok: true,
-      eventsDetected:    events.length,
-      leaguesDetected:   Array.from(leagueSet).filter(Boolean),
-      marketsDetected:   Array.from(marketSet).filter(Boolean),
-      bookmakersDetected: Array.from(bkSet).filter(Boolean),
+      sportsFound:       sports.slice(0, 15),
+      sportIdUsed:       usedSportId,
+      tournamentsFound:  rawCount,
+      tournamentsChosen: chosen.map((t) => ({
+        id:       t.tournamentId ?? t.id,
+        name:     t.tournamentName ?? t.name,
+        category: t.categoryName ?? t.category ?? '',
+        future:   t.futureFixtures ?? 0,
+        upcoming: t.upcomingFixtures ?? 0,
+        live:     t.liveFixtures ?? 0,
+      })),
+      eventsDetected:    fixtures.length,
+      bookmakersDetected: Array.from(bkSet),
+      marketsDetected:    Array.from(marketSet),
       oddsCount,
       sampleEvent,
-      structureSummary: {
-        totalEvents:    events.length,
-        fieldsInEvent:  events[0] ? Object.keys(events[0]) : [],
-        bookmakerFields: events[0]?.bookmakers?.[0] ? Object.keys(events[0].bookmakers[0]) : [],
-        marketFields:   events[0]?.bookmakers?.[0]?.markets?.[0] ? Object.keys(events[0].bookmakers[0].markets[0]) : [],
+      rawShape: {
+        topLevelKeys:     oddsData ? Object.keys(oddsData).slice(0, 10) : [],
+        sampleFixtureKeys: sampleRaw ? Object.keys(sampleRaw).slice(0, 15) : [],
+        sampleBkKeys:      (() => {
+          const bkList = sampleRaw?.bookmakerOdds ?? sampleRaw?.bookmakers ?? [];
+          return bkList[0] ? Object.keys(bkList[0]).slice(0, 10) : [];
+        })(),
+        sampleMarketKeys:  (() => {
+          const bkList = sampleRaw?.bookmakerOdds ?? sampleRaw?.bookmakers ?? [];
+          const mktList = bkList[0]?.markets ?? bkList[0]?.odds ?? [];
+          return mktList[0] ? Object.keys(mktList[0]).slice(0, 10) : [];
+        })(),
       },
-      marketVerdicts,
       technicalVerdict,
     };
   } catch (err) {
     return {
-      ok: false, eventsDetected: 0, leaguesDetected: [], marketsDetected: [],
-      bookmakersDetected: [], oddsCount: 0, structureSummary: {},
-      marketVerdicts: {}, technicalVerdict: 'exception',
-      error: String(err),
+      ok: false, sportsFound: [], sportIdUsed: null, tournamentsFound: 0,
+      tournamentsChosen: [], eventsDetected: 0, bookmakersDetected: [],
+      marketsDetected: [], oddsCount: 0, rawShape: {},
+      technicalVerdict: 'exception', error: String(err),
     };
   }
+}
+
+// -----------------------------------------------------------------------
+// debugFlow — rota de debug: sports → bookmakers → tournaments → odds
+// -----------------------------------------------------------------------
+export async function debugFlow(): Promise<{
+  ok: boolean;
+  sports: any[];
+  sportIdFound: number | null;
+  bookmakers: any[];
+  tournaments: any[];
+  tournamentsChosen: any[];
+  oddsShape: Record<string, any>;
+  error?: string;
+}> {
+  if (!getApiKey()) {
+    return {
+      ok: false, sports: [], sportIdFound: null, bookmakers: [],
+      tournaments: [], tournamentsChosen: [], oddsShape: {},
+      error: 'ODDSPAPI_API_KEY não configurada',
+    };
+  }
+
+  // 1. Sports
+  const { sportId, sports } = await getSoccerSportId();
+  const usedSportId = sportId ?? SOCCER_SPORT_ID;
+
+  // 2. Bookmakers
+  const bkUrl = buildOddsPapiUrl('/bookmakers');
+  const { data: bkData } = await safeFetch(bkUrl);
+  const bkRaw: any[] = Array.isArray(bkData) ? bkData : (bkData?.data ?? bkData?.bookmakers ?? []);
+  const bookmakers = bkRaw.slice(0, 30).map((b: any) => ({
+    name: b.bookmakerName || b.name || b.slug || '',
+    slug: b.slug || b.key || '',
+    live: !!b.liveOdds,
+  }));
+
+  // 3. Tournaments
+  const { tournaments, rawCount } = await getSoccerTournaments(usedSportId);
+  const chosen = pickBestTournaments(tournaments);
+  const tournamentIds = chosen
+    .map((t: any) => t.tournamentId ?? t.id ?? t.tournament_id)
+    .filter(Boolean)
+    .map(String);
+
+  // 4. Odds-by-tournaments
+  let oddsShape: Record<string, any> = { noTournaments: tournamentIds.length === 0 };
+  if (tournamentIds.length > 0) {
+    const oddsUrl = buildOddsPapiUrl('/odds-by-tournaments', {
+      tournamentIds: tournamentIds.join(','),
+      oddsFormat:    'decimal',
+      verbosity:     '3',
+    });
+    const { ok, status, data } = await safeFetch(oddsUrl, 25000);
+    const fixtures: any[] = Array.isArray(data)
+      ? data
+      : (data?.data ?? data?.fixtures ?? data?.events ?? data?.results ?? []);
+
+    const sample = fixtures[0];
+    oddsShape = {
+      ok,
+      status,
+      totalFixtures:     fixtures.length,
+      topLevelKeys:      data ? Object.keys(data).slice(0, 12) : [],
+      sampleFixtureKeys: sample ? Object.keys(sample).slice(0, 15) : [],
+      sampleBkKeys:      (() => {
+        const bl = sample?.bookmakerOdds ?? sample?.bookmakers ?? [];
+        return bl[0] ? Object.keys(bl[0]).slice(0, 10) : [];
+      })(),
+      sampleMarketKeys:  (() => {
+        const bl = sample?.bookmakerOdds ?? sample?.bookmakers ?? [];
+        const ml = bl[0]?.markets ?? bl[0]?.odds ?? [];
+        return ml[0] ? Object.keys(ml[0]).slice(0, 10) : [];
+      })(),
+      sampleOutcomeKeys: (() => {
+        const bl = sample?.bookmakerOdds ?? sample?.bookmakers ?? [];
+        const ml = bl[0]?.markets ?? bl[0]?.odds ?? [];
+        const ol = ml[0]?.outcomes ?? ml[0]?.selections ?? [];
+        return ol[0] ? Object.keys(ol[0]).slice(0, 8) : [];
+      })(),
+      sampleEvent: sample ? {
+        home: sample.homeTeam ?? sample.home_team ?? '',
+        away: sample.awayTeam ?? sample.away_team ?? '',
+        date: sample.startDate ?? sample.commence_time ?? '',
+      } : null,
+    };
+  }
+
+  return {
+    ok: true,
+    sports:           sports.slice(0, 20),
+    sportIdFound:     usedSportId,
+    bookmakers,
+    tournaments:      tournaments.slice(0, 20).map((t: any) => ({
+      id:       t.tournamentId ?? t.id,
+      name:     t.tournamentName ?? t.name,
+      category: t.categoryName ?? t.category ?? '',
+      future:   t.futureFixtures ?? 0,
+      upcoming: t.upcomingFixtures ?? 0,
+      live:     t.liveFixtures ?? 0,
+    })),
+    tournamentsChosen: chosen.map((t: any) => ({
+      id:   t.tournamentId ?? t.id,
+      name: t.tournamentName ?? t.name,
+    })),
+    oddsShape,
+  };
 }
 
 // -----------------------------------------------------------------------
@@ -343,25 +532,28 @@ export function normalizeBookmaker(bkKey: string, bkTitle: string): ParsedBookma
 }
 
 export function normalizeEvent(ev: any): ParsedEvent {
+  const home = ev.homeTeam ?? ev.home_team ?? ev.home ?? '';
+  const away = ev.awayTeam ?? ev.away_team ?? ev.away ?? '';
   return {
     sport:        'Futebol',
-    league:       ev.sport_title || ev.league || 'Futebol Internacional',
-    eventName:    `${ev.home_team} x ${ev.away_team}`,
-    eventDate:    ev.commence_time || undefined,
-    originalText: `${ev.home_team} vs ${ev.away_team}`,
+    league:       ev.tournamentName ?? ev.sport_title ?? ev.league ?? 'Futebol Internacional',
+    eventName:    `${home} x ${away}`,
+    eventDate:    ev.startDate ?? ev.commence_time ?? ev.date ?? undefined,
+    originalText: `${home} vs ${away}`,
   };
 }
 
 export function normalizeMarket(marketKey: string): ParsedMarket | null {
-  const mapped = MARKET_MAP[marketKey];
+  const key   = marketKey.toLowerCase().replace(/\s+/g, '_');
+  const mapped = MARKET_MAP[key] ?? MARKET_MAP[marketKey];
   if (!mapped) return null;
 
   const baseSelections: ParsedSelection[] = [];
-  if (marketKey === 'h2h') {
+  if (key === 'h2h' || key === '1x2' || key === 'match_winner' || key === 'winner') {
     baseSelections.push({ name: 'Casa',   originalName: 'home' });
     baseSelections.push({ name: 'Empate', originalName: 'draw' });
     baseSelections.push({ name: 'Fora',   originalName: 'away' });
-  } else if (marketKey === 'btts') {
+  } else if (key === 'btts') {
     baseSelections.push({ name: 'Sim', originalName: 'Yes' });
     baseSelections.push({ name: 'Não', originalName: 'No' });
   }
@@ -376,28 +568,30 @@ export function normalizeSelection(
   awayTeam: string,
 ): ParsedSelection {
   const lower = outcomeName.toLowerCase();
-  let name = outcomeName;
+  const mkt   = marketKey.toLowerCase();
+  let name    = outcomeName;
 
-  if (marketKey === 'h2h') {
-    if (lower === homeTeam.toLowerCase() || lower === 'home') name = 'Casa';
-    else if (lower === awayTeam.toLowerCase() || lower === 'away') name = 'Fora';
-    else if (lower === 'draw') name = 'Empate';
-  } else if (marketKey === 'btts') {
-    if (lower === 'yes') name = 'Sim';
-    else if (lower === 'no') name = 'Não';
+  if (mkt === 'h2h' || mkt === '1x2' || mkt === 'match_winner' || mkt === 'winner') {
+    if (lower === homeTeam.toLowerCase() || lower === 'home' || lower === '1') name = 'Casa';
+    else if (lower === awayTeam.toLowerCase() || lower === 'away' || lower === '2') name = 'Fora';
+    else if (lower === 'draw' || lower === 'x' || lower === 'tie') name = 'Empate';
+  } else if (mkt === 'btts') {
+    if (lower === 'yes' || lower === 'sim') name = 'Sim';
+    else if (lower === 'no' || lower === 'não' || lower === 'nao') name = 'Não';
   }
 
   return { name, originalName: outcomeName };
 }
 
-export function normalizeOdd(value: number | string): number | null {
+export function normalizeOdd(value: number | string | undefined | null): number | null {
+  if (value === undefined || value === null) return null;
   const num = typeof value === 'string' ? parseFloat(value) : value;
   if (isNaN(num) || num <= 1.0 || num > 1000) return null;
   return Math.round(num * 100) / 100;
 }
 
 // -----------------------------------------------------------------------
-// fetchFootballOdds — busca odds e normaliza para ParsedOdd[]
+// fetchFootballOdds — fluxo completo para import
 // -----------------------------------------------------------------------
 export async function fetchFootballOdds(): Promise<{
   ok: boolean;
@@ -412,56 +606,72 @@ export async function fetchFootballOdds(): Promise<{
   }
 
   try {
-    const url = buildOddsPapiUrl(`/sports/${SPORT_FOOTBALL}/odds`, {
-      regions:    'eu,uk',
-      markets:    ACCEPTED_MARKETS.join(','),
-      oddsFormat: 'decimal',
+    // 1. Descobrir sportId
+    const { sportId } = await getSoccerSportId();
+    const usedSportId = sportId ?? SOCCER_SPORT_ID;
+
+    // 2. Buscar torneios
+    const { tournaments } = await getSoccerTournaments(usedSportId);
+    const chosen = pickBestTournaments(tournaments);
+    const tournamentIds = chosen
+      .map((t: any) => t.tournamentId ?? t.id ?? t.tournament_id)
+      .filter(Boolean)
+      .map(String);
+
+    if (tournamentIds.length === 0) {
+      return { ok: false, odds: [], eventsCount: 0, error: 'Nenhum torneio de futebol com fixtures disponíveis' };
+    }
+
+    // 3. Buscar odds
+    const url = buildOddsPapiUrl('/odds-by-tournaments', {
+      tournamentIds: tournamentIds.join(','),
+      oddsFormat:    'decimal',
+      verbosity:     '3',
     });
 
-    const res = await fetch(url, {
-      headers: buildHeaders(),
-      signal:  AbortSignal.timeout(20000),
-    });
-
+    const res = await fetch(url, { headers: buildHeaders(), signal: AbortSignal.timeout(25000) });
     const requestsUsed      = parseInt(res.headers.get('x-requests-used')      || '0') || undefined;
     const requestsRemaining = parseInt(res.headers.get('x-requests-remaining') || '0') || undefined;
 
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      return {
-        ok: false, odds: [], eventsCount: 0,
-        error: `HTTP ${res.status}: ${body.substring(0, 300)}`,
-        requestsUsed,
-        requestsRemaining,
-      };
+      return { ok: false, odds: [], eventsCount: 0, error: `HTTP ${res.status}: ${body.substring(0, 300)}`, requestsUsed, requestsRemaining };
     }
 
-    const data   = await res.json();
-    const events = Array.isArray(data) ? data : [];
+    const data: any = await res.json();
+    const fixtures: any[] = Array.isArray(data)
+      ? data
+      : (data?.data ?? data?.fixtures ?? data?.events ?? data?.results ?? []);
+
     const parsedOdds: ParsedOdd[] = [];
 
-    for (const ev of events) {
-      const parsedEvent = normalizeEvent(ev);
+    for (const fixture of fixtures) {
+      const parsedEvent = normalizeEvent(fixture);
+      const bkList: any[] = fixture.bookmakerOdds ?? fixture.bookmakers ?? fixture.odds ?? [];
 
-      for (const bk of (ev.bookmakers || [])) {
-        const parsedBookmaker = normalizeBookmaker(bk.key || '', bk.title || bk.key || '');
+      for (const bk of bkList) {
+        const bkName = bk.bookmakerName ?? bk.bookmaker ?? bk.name ?? bk.slug ?? '';
+        const bkSlug = bk.slug ?? bk.key ?? bkName;
+        const parsedBookmaker = normalizeBookmaker(bkSlug, bkName);
 
-        for (const market of (bk.markets || [])) {
-          const marketKey = market.key || '';
-          if (!ACCEPTED_MARKETS.includes(marketKey)) continue;
-
+        const markets: any[] = bk.markets ?? bk.odds ?? bk.market ?? [];
+        for (const mkt of markets) {
+          const marketKey = (mkt.marketName ?? mkt.market ?? mkt.key ?? mkt.name ?? '').toLowerCase().replace(/\s+/g, '_');
           const parsedMarket = normalizeMarket(marketKey);
           if (!parsedMarket) continue;
 
-          for (const outcome of (market.outcomes || [])) {
-            const oddValue = normalizeOdd(outcome.price);
+          const outcomes: any[] = mkt.outcomes ?? mkt.selections ?? mkt.odds ?? [];
+          for (const outcome of outcomes) {
+            const price    = outcome.price ?? outcome.odd ?? outcome.value ?? outcome.decimal;
+            const oddValue = normalizeOdd(price);
             if (oddValue === null) continue;
 
+            const selName = outcome.outcomeName ?? outcome.name ?? outcome.selection ?? '';
             const parsedSelection = normalizeSelection(
-              outcome.name || '',
+              selName,
               marketKey,
-              ev.home_team || '',
-              ev.away_team || '',
+              fixture.homeTeam ?? fixture.home_team ?? '',
+              fixture.awayTeam ?? fixture.away_team ?? '',
             );
 
             parsedOdds.push({
@@ -476,15 +686,12 @@ export async function fetchFootballOdds(): Promise<{
       }
     }
 
-    return { ok: true, odds: parsedOdds, eventsCount: events.length, requestsUsed, requestsRemaining };
+    return { ok: true, odds: parsedOdds, eventsCount: fixtures.length, requestsUsed, requestsRemaining };
   } catch (err) {
     return { ok: false, odds: [], eventsCount: 0, error: String(err) };
   }
 }
 
-// -----------------------------------------------------------------------
-// mapToGuimaBetsFormat — wrapper geral (alias de fetchFootballOdds)
-// -----------------------------------------------------------------------
 export async function mapToGuimaBetsFormat(): Promise<ParsedOdd[]> {
   const result = await fetchFootballOdds();
   return result.odds;
