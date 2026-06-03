@@ -1,26 +1,60 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: #030303;
+  --color-foreground: #f4f4f5;
+  --font-sans: var(--font-geist-sans), 'Inter', sans-serif;
+  --font-mono: var(--font-geist-mono), monospace;
+  --font-space: 'Space Grotesk', sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  --background: #030303;
+  --foreground: #f4f4f5;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #030303;
+  color: #f4f4f5;
+  font-family: var(--font-sans);
+}
+
+/* Custom Scrollbar estilo terminal financeiro */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: #050505;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1a1a1a;
+  border-radius: 99px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2b2b2b;
+}
+
+/* Animações e Efeitos Finos */
+.glow-green {
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.1);
+}
+
+.glow-gold {
+  box-shadow: 0 0 15px rgba(212, 175, 55, 0.15);
+}
+
+.border-trading {
+  border-color: #121212;
+}
+
+.bg-trading-card {
+  background-color: #080808;
+}
+
+.bg-trading-input {
+  background-color: #0c0c0c;
 }
