@@ -1,13 +1,19 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserSettings, Bookmaker } from '../types';
 import { 
   Settings, 
   Upload, 
   Plus, 
-  ShieldCheck
+  ShieldCheck,
+  Server,
+  Zap,
+  RefreshCw,
+  Clock,
+  Wifi
 } from 'lucide-react';
+import { serverDataProvider } from '../lib/data/ServerDataProvider';
 
 interface ConfiguracoesScreenProps {
   settings: UserSettings;
@@ -45,6 +51,36 @@ export default function ConfiguracoesScreen({
   const [warmThresholdSec, setWarmThresholdSec] = useState(settings.warmThresholdSec);
   const [mockEnabled, setMockEnabled] = useState(settings.mockEnabled);
   const [feedbackSettings, setFeedbackSettings] = useState('');
+
+  // Admin Server
+  const isServerMode = process.env.NEXT_PUBLIC_USE_SERVER_DATA === 'true';
+  const [adminSecret, setAdminSecret] = useState('');
+  const [adminFeedback, setAdminFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
+  const [adminLoading, setAdminLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('gmb_admin_secret');
+    if (saved) setAdminSecret(saved);
+  }, []);
+
+  const saveAdminSecret = () => {
+    localStorage.setItem('gmb_admin_secret', adminSecret);
+    setAdminFeedback({ type: 'ok', msg: 'Secret salvo no localStorage.' });
+    setTimeout(() => setAdminFeedback(null), 2000);
+  };
+
+  const adminAction = async (label: string, fn: () => Promise<unknown>) => {
+    setAdminLoading(label);
+    setAdminFeedback(null);
+    try {
+      const result = await fn();
+      setAdminFeedback({ type: 'ok', msg: JSON.stringify(result, null, 2) });
+    } catch (err) {
+      setAdminFeedback({ type: 'err', msg: String(err) });
+    } finally {
+      setAdminLoading(null);
+    }
+  };
 
   const [manualSport, setManualSport] = useState('Futebol');
   const [manualLeague, setManualLeague] = useState('Brasileirão Série A');
@@ -432,15 +468,137 @@ export default function ConfiguracoesScreen({
           <div className="space-y-2 text-[10px] font-mono">
             <div className="flex items-center justify-between p-2.5 bg-[#0a0a0a] border border-[#151515] rounded">
               <span className="text-zinc-400 font-bold">OddsAgoraProvider.ts</span>
-              <span className="text-[8px] bg-zinc-900 text-zinc-600 border border-[#1a1a1a] px-2 py-0.5 rounded font-mono uppercase font-bold">Inativo</span>
+              <span className="text-[8px] bg-zinc-900 text-zinc-600 border border-[#1a1a1a] px-2 py-0.5 rounded font-mono uppercase font-bold">Probe ativo</span>
             </div>
             <div className="flex items-center justify-between p-2.5 bg-[#0a0a0a] border border-[#151515] rounded">
               <span className="text-zinc-400 font-bold">OddspediaProvider.ts</span>
-              <span className="text-[8px] bg-zinc-900 text-zinc-600 border border-[#1a1a1a] px-2 py-0.5 rounded font-mono uppercase font-bold">Inativo</span>
+              <span className="text-[8px] bg-zinc-900 text-zinc-600 border border-[#1a1a1a] px-2 py-0.5 rounded font-mono uppercase font-bold">Probe ativo</span>
             </div>
           </div>
         </div>
 
+      </div>
+
+      {/* Painel Admin Server — sempre visível, mas avisa se modo local */}
+      <div className="bg-[#080808] border border-[#1a1a1a] rounded-lg p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Server className="w-3.5 h-3.5 text-sky-400" />
+            <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider font-space font-extrabold">Servidor / Admin</h2>
+          </div>
+          <span className={`text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border font-mono ${
+            isServerMode
+              ? 'text-sky-400 border-sky-500/20 bg-sky-500/5'
+              : 'text-zinc-600 border-zinc-800 bg-zinc-950'
+          }`}>
+            {isServerMode ? 'Modo Servidor ativo' : 'Modo Local ativo'}
+          </span>
+        </div>
+
+        {!isServerMode && (
+          <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded text-[10px] text-amber-400 font-medium leading-relaxed">
+            ⚠️ O modo servidor está desativado. Defina{' '}
+            <code className="font-mono">NEXT_PUBLIC_USE_SERVER_DATA=true</code> no{' '}
+            <code className="font-mono">.env.local</code> para ativar e usar o Supabase.
+            Os botões abaixo ainda funcionam se o servidor estiver rodando.
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider mb-1.5">
+              Admin Secret (salvo localmente)
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                placeholder="Seu GMB_ADMIN_SECRET"
+                value={adminSecret}
+                onChange={(e) => setAdminSecret(e.target.value)}
+                className="flex-1 bg-[#0a0a0a] border border-[#151515] rounded p-2.5 text-zinc-200 font-mono text-xs focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={saveAdminSecret}
+                className="px-3 bg-sky-500/10 border border-sky-500/20 hover:border-sky-500/40 text-sky-400 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer"
+              >
+                Salvar
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+            <button
+              type="button"
+              disabled={!!adminLoading}
+              onClick={() => adminAction('health', () => serverDataProvider.getHealth())}
+              className="flex items-center justify-center gap-1.5 p-2.5 bg-[#0a0a0a] border border-[#151515] hover:border-sky-500/20 hover:text-sky-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-40"
+            >
+              {adminLoading === 'health' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
+              Health Check
+            </button>
+
+            <button
+              type="button"
+              disabled={!!adminLoading}
+              onClick={() => adminAction('mock', () => serverDataProvider.generateMock(adminSecret))}
+              className="flex items-center justify-center gap-1.5 p-2.5 bg-[#0a0a0a] border border-[#151515] hover:border-emerald-500/20 hover:text-emerald-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-40"
+            >
+              {adminLoading === 'mock' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}
+              Gerar Mock
+            </button>
+
+            <button
+              type="button"
+              disabled={!!adminLoading}
+              onClick={() => adminAction('expire', () => serverDataProvider.expireOdds(adminSecret))}
+              className="flex items-center justify-center gap-1.5 p-2.5 bg-[#0a0a0a] border border-[#151515] hover:border-amber-500/20 hover:text-amber-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-40"
+            >
+              {adminLoading === 'expire' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Clock className="w-3 h-3" />}
+              Expirar Odds
+            </button>
+
+            <button
+              type="button"
+              disabled={!!adminLoading}
+              onClick={() => adminAction('recalc', () => serverDataProvider.recalculateOpportunities(adminSecret))}
+              className="flex items-center justify-center gap-1.5 p-2.5 bg-[#0a0a0a] border border-[#151515] hover:border-purple-500/20 hover:text-purple-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-40"
+            >
+              {adminLoading === 'recalc' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Recalcular
+            </button>
+
+            <button
+              type="button"
+              disabled={!!adminLoading}
+              onClick={() => adminAction('probe-agora', () => serverDataProvider.probeScraper(adminSecret, 'oddsagora'))}
+              className="flex items-center justify-center gap-1.5 p-2.5 bg-[#0a0a0a] border border-[#151515] hover:border-zinc-600 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-40"
+            >
+              {adminLoading === 'probe-agora' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
+              Probe OddsAgora
+            </button>
+
+            <button
+              type="button"
+              disabled={!!adminLoading}
+              onClick={() => adminAction('probe-pedia', () => serverDataProvider.probeScraper(adminSecret, 'oddspedia'))}
+              className="flex items-center justify-center gap-1.5 p-2.5 bg-[#0a0a0a] border border-[#151515] hover:border-zinc-600 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-40"
+            >
+              {adminLoading === 'probe-pedia' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
+              Probe Oddspedia
+            </button>
+          </div>
+
+          {adminFeedback && (
+            <div className={`p-3 rounded border text-[10px] font-mono whitespace-pre-wrap break-all overflow-auto max-h-48 ${
+              adminFeedback.type === 'ok'
+                ? 'bg-sky-500/5 border-sky-500/10 text-sky-400'
+                : 'bg-red-500/5 border-red-500/10 text-red-400'
+            }`}>
+              {adminFeedback.msg}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
