@@ -18,7 +18,9 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
-  Search
+  Search,
+  BarChart2,
+  Database
 } from 'lucide-react';
 import { serverDataProvider, type ProbeResult } from '../lib/data/ServerDataProvider';
 
@@ -1150,6 +1152,245 @@ export default function ConfiguracoesScreen({
           </div>
         )}
       </div>
+
+      {/* ===== PAINEL ODDSPAPI ===== */}
+      <OddsPapiPanel adminSecret={adminSecret} />
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------
+// Componente separado para manter o ConfiguracoesScreen enxuto
+// -----------------------------------------------------------------------
+function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
+  const [loading, setLoading] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [lastRequestAt, setLastRequestAt] = useState<number>(0);
+  const COOLDOWN_MS = 60_000;
+
+  const [healthResult, setHealthResult] = useState<any>(null);
+  const [bookmakersResult, setBookmakersResult] = useState<any>(null);
+  const [probeResult, setProbeResult] = useState<any>(null);
+  const [importResult, setImportResult] = useState<any>(null);
+
+  const callOddsPapi = async (action: string, endpoint: string) => {
+    const now = Date.now();
+    if (action !== 'health' && now - lastRequestAt < COOLDOWN_MS) {
+      const remaining = Math.ceil((COOLDOWN_MS - (now - lastRequestAt)) / 1000);
+      setError(`Aguarde ${remaining}s antes de fazer nova requisição (limite da OddsPapi).`);
+      return;
+    }
+    if (!adminSecret) {
+      setError('Secret do admin obrigatório');
+      return;
+    }
+    setLoading(action);
+    setError(null);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-secret': adminSecret },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Erro na requisição');
+      setLastRequestAt(Date.now());
+      return data;
+    } catch (err) {
+      setError(String(err));
+      return null;
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const runHealth = async () => {
+    const data = await callOddsPapi('health', '/api/providers/oddspapi/health');
+    if (data) setHealthResult(data);
+  };
+
+  const runBookmakers = async () => {
+    const data = await callOddsPapi('bookmakers', '/api/providers/oddspapi/bookmakers');
+    if (data) setBookmakersResult(data);
+  };
+
+  const runProbe = async () => {
+    const data = await callOddsPapi('probe', '/api/providers/oddspapi/football-probe');
+    if (data) setProbeResult(data);
+  };
+
+  const runImport = async () => {
+    if (!window.confirm('Esta ação consome requisições da OddsPapi. Confirma o import?')) return;
+    const data = await callOddsPapi('import', '/api/providers/oddspapi/import-football');
+    if (data) setImportResult(data);
+  };
+
+  const isLoading = !!loading;
+
+  return (
+    <div className="bg-[#080808] border border-[#1a1a1a] rounded-lg p-5 space-y-5">
+      {/* Header */}
+      <div className="flex items-center gap-2">
+        <BarChart2 className="w-3.5 h-3.5 text-violet-400" />
+        <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider font-extrabold">Fonte API — OddsPapi Futebol</h2>
+        <span className="text-[8px] font-bold text-violet-500 border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 rounded font-mono uppercase">Real</span>
+      </div>
+
+      <p className="text-[10px] text-zinc-600 leading-relaxed">
+        Integração com a OddsPapi para odds reais de futebol. Apenas futebol. Sem cron — use os botões abaixo manualmente.
+        <span className="ml-1 text-amber-500/80">⚠ Cada clique consome requisições da sua cota.</span>
+      </p>
+
+      {/* Status rápido */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[9px] font-mono">
+        <div className="p-3 bg-[#0a0a0a] border border-[#151515] rounded">
+          <p className="text-zinc-600 mb-1">API Key</p>
+          <p className={healthResult?.ok ? 'text-emerald-400 font-bold' : 'text-zinc-500'}>
+            {healthResult?.ok ? 'Válida ✓' : 'Não testada'}
+          </p>
+        </div>
+        <div className="p-3 bg-[#0a0a0a] border border-[#151515] rounded">
+          <p className="text-zinc-600 mb-1">Último Import</p>
+          <p className="text-zinc-400">{importResult ? 'Recente ✓' : '—'}</p>
+        </div>
+        <div className="p-3 bg-[#0a0a0a] border border-[#151515] rounded">
+          <p className="text-zinc-600 mb-1">Odds Salvas</p>
+          <p className="text-emerald-400 font-bold">{importResult?.oddsSaved ?? '—'}</p>
+        </div>
+        <div className="p-3 bg-[#0a0a0a] border border-[#151515] rounded">
+          <p className="text-zinc-600 mb-1">Oportunidades</p>
+          <p className="text-violet-400 font-bold">{importResult?.opportunitiesCreated ?? '—'}</p>
+        </div>
+      </div>
+
+      {/* Botões */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <button type="button" disabled={isLoading}
+          onClick={runHealth}
+          className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-emerald-500/30 hover:text-emerald-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+        >
+          {loading === 'health' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
+          Testar Conexão
+        </button>
+
+        <button type="button" disabled={isLoading}
+          onClick={runBookmakers}
+          className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-blue-500/30 hover:text-blue-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+        >
+          {loading === 'bookmakers' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+          Listar Bookmakers
+        </button>
+
+        <button type="button" disabled={isLoading}
+          onClick={runProbe}
+          className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-sky-500/30 hover:text-sky-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+        >
+          {loading === 'probe' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+          Testar Futebol
+        </button>
+
+        <button type="button" disabled={isLoading}
+          onClick={runImport}
+          className="flex items-center justify-center gap-2 p-3 bg-[#0a0005] border border-violet-900/50 hover:border-violet-500/80 hover:bg-violet-900/20 text-violet-400 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40 col-span-2 md:col-span-2"
+        >
+          {loading === 'import' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
+          Importar Odds de Futebol → Supabase
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="p-3 bg-red-500/5 border border-red-500/10 rounded text-[10px] text-red-400 font-mono">{error}</div>
+      )}
+
+      {/* Health result */}
+      {healthResult && (
+        <div className="p-4 bg-[#0a0a0a] border border-[#151515] rounded space-y-2">
+          <p className="text-[9px] font-bold text-zinc-500 uppercase mb-2">Conexão OddsPapi</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[9px] font-mono">
+            <div><p className="text-zinc-600">Status</p><p className={healthResult.ok ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold'}>{healthResult.ok ? 'OK' : 'ERRO'}</p></div>
+            <div><p className="text-zinc-600">HTTP</p><p className="text-zinc-300">{healthResult.status}</p></div>
+            <div><p className="text-zinc-600">Resposta</p><p className="text-zinc-300">{healthResult.responseTimeMs}ms</p></div>
+            <div><p className="text-zinc-600">Reqs Restantes</p><p className="text-zinc-300">{healthResult.requestsRemaining ?? '—'}</p></div>
+          </div>
+          {healthResult.error && <p className="text-[9px] text-red-400 font-mono mt-2">{healthResult.error}</p>}
+        </div>
+      )}
+
+      {/* Bookmakers result */}
+      {bookmakersResult && (
+        <div className="p-4 bg-[#0a0a0a] border border-[#151515] rounded space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Bookmakers Detectados</p>
+            <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+              bookmakersResult.verdict === 'viable' ? 'bg-emerald-500/10 text-emerald-400' :
+              bookmakersResult.verdict === 'partial' ? 'bg-amber-500/10 text-amber-400' :
+              'bg-red-500/10 text-red-400'
+            }`}>{bookmakersResult.verdict?.toUpperCase()}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-[9px] font-mono">
+            <div>
+              <p className="text-emerald-600 font-bold mb-1">Encontradas ({bookmakersResult.priorityFound?.length})</p>
+              {bookmakersResult.priorityFound?.map((b: string, i: number) => (
+                <p key={i} className="text-emerald-400">✓ {b}</p>
+              ))}
+            </div>
+            <div>
+              <p className="text-zinc-700 font-bold mb-1">Ausentes ({bookmakersResult.priorityMissing?.length})</p>
+              {bookmakersResult.priorityMissing?.map((b: string, i: number) => (
+                <p key={i} className="text-zinc-600">✗ {b}</p>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Probe result */}
+      {probeResult && (
+        <div className="p-4 bg-[#0a0a0a] border border-[#151515] rounded space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Probe Futebol</p>
+            <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+              probeResult.technicalVerdict?.includes('viable') ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
+            }`}>{probeResult.technicalVerdict}</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[9px] font-mono">
+            <div><p className="text-zinc-600">Eventos</p><p className="text-zinc-300 font-bold">{probeResult.eventsDetected}</p></div>
+            <div><p className="text-zinc-600">Odds</p><p className="text-zinc-300 font-bold">{probeResult.oddsCount}</p></div>
+            <div><p className="text-zinc-600">Casas</p><p className="text-zinc-300 font-bold">{probeResult.bookmakersDetected?.length}</p></div>
+            <div><p className="text-zinc-600">Ligas</p><p className="text-zinc-300 font-bold">{probeResult.leaguesDetected?.length}</p></div>
+          </div>
+          {probeResult.sampleEvent && (
+            <div className="mt-2 pt-2 border-t border-[#151515]">
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Amostra</p>
+              <p className="text-[9px] text-zinc-400 font-mono">{probeResult.sampleEvent.homeTeam} x {probeResult.sampleEvent.awayTeam}</p>
+              <p className="text-[9px] text-zinc-600 font-mono">{probeResult.sampleEvent.sport} · {probeResult.sampleEvent.bookmakersCount} casas · mercados: {probeResult.sampleEvent.marketsAvailable?.join(', ')}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Import result */}
+      {importResult && (
+        <div className="p-4 bg-[#070a07] border border-emerald-900/30 rounded space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[9px] font-bold text-emerald-500/70 uppercase">Resultado do Import</p>
+            <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${importResult.ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+              {importResult.ok ? 'SUCESSO' : 'ERRO'}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[9px] font-mono">
+            <div><p className="text-zinc-600">Eventos</p><p className="text-zinc-300 font-bold">{importResult.eventsImported ?? 0}</p></div>
+            <div><p className="text-zinc-600">Odds Salvas</p><p className="text-emerald-400 font-bold">{importResult.oddsSaved ?? 0}</p></div>
+            <div><p className="text-zinc-600">Casas</p><p className="text-zinc-300 font-bold">{importResult.bookmakersUpserted ?? 0}</p></div>
+            <div><p className="text-zinc-600">Oportunidades</p><p className="text-violet-400 font-bold">{importResult.opportunitiesCreated ?? 0}</p></div>
+          </div>
+          <div className="flex gap-4 text-[9px] font-mono">
+            {importResult.requestsUsed !== undefined && <span className="text-zinc-600">Reqs usadas: <span className="text-zinc-400">{importResult.requestsUsed}</span></span>}
+            {importResult.requestsRemaining !== undefined && <span className="text-zinc-600">Reqs restantes: <span className="text-zinc-400">{importResult.requestsRemaining}</span></span>}
+          </div>
+          {importResult.error && <p className="text-[9px] text-red-400 font-mono">{importResult.error}</p>}
+        </div>
+      )}
     </div>
   );
 }
