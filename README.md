@@ -31,6 +31,13 @@ O **GuimaBets** é um painel web privado, moderno e minimalista para monitoramen
 - Painel de Diagnóstico visual colorido direto na Vercel sem precisar rodar localmente.
 - Nenhuma odd é extraída ainda — o foco é garantir viabilidade técnica de extração.
 
+### Etapa 4 — Parser Inicial do OddsAgora ✅
+- Refatoração do provider OddsAgora para incluir `runParser()`.
+- Diagnóstico profundo da resposta para identificar modelo de extração (`next_data`, `js_rendered`, `api_endpoint`, `html`).
+- Persistência das odds extraídas e normalizadas no Supabase usando a camada de banco de dados nativa.
+- Registro visual e de banco de dados para os logs de cada tentativa de extração.
+- Modo conservador de requests, respeitando limites e não usando proxy.
+
 ---
 
 ## 🛠️ Tecnologias

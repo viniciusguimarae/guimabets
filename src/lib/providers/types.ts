@@ -82,3 +82,47 @@ export interface OddsProviderAdapter {
    */
   isConfigured(): boolean;
 }
+
+// --- Tipos de Dados Parseados (Etapa 4) ---
+
+export interface ParsedBookmaker {
+  name: string;      // ex: "Bet365"
+  originalName: string;
+}
+
+export interface ParsedEvent {
+  sport: string;     // ex: "Futebol"
+  league: string;    // ex: "Brasileirão"
+  eventName: string; // ex: "Flamengo x Fluminense"
+  eventDate?: string; // ISO se disponível
+  originalText: string;
+}
+
+export interface ParsedSelection {
+  name: string;      // ex: "Casa", "Mais de 2.5"
+  originalName: string;
+}
+
+export interface ParsedMarket {
+  type: string;      // ex: "1X2", "OVER_UNDER_2.5"
+  name: string;      // ex: "Resultado Final", "Total de Gols"
+  originalName: string;
+  selections: ParsedSelection[];
+}
+
+export interface ParsedOdd {
+  event: ParsedEvent;
+  market: ParsedMarket;
+  selection: ParsedSelection;
+  bookmaker: ParsedBookmaker;
+  value: number;
+}
+
+export interface ParseResult {
+  provider: string;
+  success: boolean;
+  extractionMode: 'html' | 'next_data' | 'api_endpoint' | 'js_rendered' | 'blocked' | 'unknown' | 'not_available';
+  odds: ParsedOdd[];
+  diagnostics: ProbeResult;
+  warnings: string[];
+}

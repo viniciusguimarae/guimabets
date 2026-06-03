@@ -8,18 +8,31 @@ export async function POST(request: Request) {
   const authError = requireAdminSecret(request);
   if (authError) return authError;
 
-  // Etapa 2: Scraper real não implementado ainda.
-  // Esta rota existe como placeholder para a Etapa 3.
-  return NextResponse.json({
-    ok: false,
-    stage: 'Etapa 2',
-    message:
-      'Scraper real ainda não implementado nesta etapa. ' +
-      'Use /api/mock/generate para gerar dados de teste no Supabase. ' +
-      'Implementação real de scraping prevista para a Etapa 3.',
-    roadmap: {
-      etapa2: 'Backend mínimo e ciclo de vida das odds ✅',
-      etapa3: 'Scraper real com dados de fontes públicas (Em breve)',
-    },
-  });
+  try {
+    const body = await request.json().catch(() => ({}));
+    const provider = body.provider?.toLowerCase() || 'oddsagora';
+
+    if (provider === 'oddsagora') {
+      const baseUrl = request.url.substring(0, request.url.indexOf('/api'));
+      // Fazer uma chamada interna para a rota do OddsAgora,
+      // passando os mesmos headers para manter auth
+      const runRes = await fetch(`${baseUrl}/api/scraper/oddsagora/run`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': request.headers.get('x-admin-secret') || '',
+        },
+        body: JSON.stringify({ mode: 'parse_and_save' })
+      });
+      const data = await runRes.json();
+      return NextResponse.json(data);
+    }
+
+    return NextResponse.json({
+      ok: false,
+      message: `Provider ${provider} não suportado na Etapa 4. Foco atual no OddsAgora.`,
+    });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
 }

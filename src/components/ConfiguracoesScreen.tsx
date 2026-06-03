@@ -121,6 +121,36 @@ export default function ConfiguracoesScreen({
     }
   };
 
+  // Parser OddsAgora - Etapa 4
+  const [parserLoading, setParserLoading] = useState<string | null>(null);
+  const [parserResult, setParserResult] = useState<any | null>(null);
+  const [parserError, setParserError] = useState<string | null>(null);
+
+  const runOddsAgoraScraper = async (mode: 'diagnostic' | 'parse_and_save') => {
+    setParserLoading(mode);
+    setParserResult(null);
+    setParserError(null);
+    try {
+      const res = await fetch('/api/scraper/oddsagora/run', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': adminSecret,
+        },
+        body: JSON.stringify({ mode }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro na requisição');
+      }
+      setParserResult(data);
+    } catch (err) {
+      setParserError(String(err));
+    } finally {
+      setParserLoading(null);
+    }
+  };
+
   const [manualSport, setManualSport] = useState('Futebol');
   const [manualLeague, setManualLeague] = useState('Brasileirão Série A');
   const [manualEvent, setManualEvent] = useState('');
@@ -825,6 +855,94 @@ export default function ConfiguracoesScreen({
           <div className="flex items-center justify-center gap-2 p-6 border border-dashed border-[#151515] rounded text-zinc-700 text-[10px]">
             <AlertTriangle className="w-4 h-4" />
             Clique em "Testar OddsAgora" ou "Testar Oddspedia" para iniciar o diagnóstico
+          </div>
+        )}
+      </div>
+
+      {/* Painel de Scraper Real — Etapa 4 */}
+      <div className="bg-[#080808] border border-[#1a1a1a] rounded-lg p-5 space-y-5">
+        <div className="flex items-center gap-2">
+          <Activity className="w-3.5 h-3.5 text-blue-400" />
+          <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider font-space font-extrabold">Scraper Real (OddsAgora)</h2>
+          <span className="text-[8px] font-bold text-blue-500 border border-blue-500/20 bg-blue-500/5 px-2 py-0.5 rounded font-mono uppercase">Etapa 4</span>
+        </div>
+
+        <p className="text-[10px] text-zinc-600 leading-relaxed">
+          Executa a lógica de extração no OddsAgora. Diagnóstico profundo verifica se os dados estão na página e o Parser tenta salvar os dados no Supabase.
+        </p>
+
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            disabled={!!parserLoading}
+            onClick={() => runOddsAgoraScraper('diagnostic')}
+            className="flex items-center justify-center gap-2 p-3 bg-[#0a0a0a] border border-[#151515] hover:border-blue-500/20 hover:text-blue-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+          >
+            {parserLoading === 'diagnostic' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+            Diagnóstico Profundo
+          </button>
+          
+          <button
+            type="button"
+            disabled={!!parserLoading}
+            onClick={() => runOddsAgoraScraper('parse_and_save')}
+            className="flex items-center justify-center gap-2 p-3 bg-[#0a0a0a] border border-[#151515] hover:border-emerald-500/20 hover:text-emerald-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+          >
+            {parserLoading === 'parse_and_save' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            Rodar Parser
+          </button>
+        </div>
+
+        {parserError && (
+          <div className="p-3 bg-red-500/5 border border-red-500/10 rounded text-[10px] text-red-400 font-mono">
+            Erro: {parserError}
+          </div>
+        )}
+
+        {parserResult && (
+          <div className="space-y-4 p-4 bg-[#0a0a0a] border border-[#151515] rounded">
+            <div className="flex items-center justify-between border-b border-[#151515] pb-2">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase">Resultado do Scraper</span>
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${parserResult.success ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                {parserResult.success ? 'SUCESSO' : 'FALHA PARCIAL'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-[10px] font-mono">
+              <div>
+                <p className="text-zinc-600 mb-1">Modo de Extração</p>
+                <p className="text-sky-400 font-bold">{parserResult.extractionMode || 'N/A'}</p>
+              </div>
+              {parserResult.eventsExtracted !== undefined && (
+                <>
+                  <div>
+                    <p className="text-zinc-600 mb-1">Eventos Extraídos</p>
+                    <p className="text-zinc-300 font-bold">{parserResult.eventsExtracted}</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-600 mb-1">Odds Extraídas</p>
+                    <p className="text-zinc-300 font-bold">{parserResult.oddsExtracted}</p>
+                  </div>
+                  <div>
+                    <p className="text-zinc-600 mb-1">Odds Salvas</p>
+                    <p className="text-emerald-400 font-bold">{parserResult.oddsSaved}</p>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {parserResult.warnings && parserResult.warnings.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-[#151515]">
+                <p className="text-[9px] font-bold text-amber-500 uppercase mb-2">Avisos e Notas de Inspeção</p>
+                <ul className="space-y-1">
+                  {parserResult.warnings.map((w: string, i: number) => (
+                    <li key={i} className="text-[9px] text-amber-400/80 font-mono flex items-start gap-2">
+                      <span className="mt-0.5">•</span> {w}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -122,25 +122,82 @@ export class OddsAgoraProvider implements OddsProviderAdapter {
       };
     }
   }
+
+  async runParser(): Promise<import('./types').ParseResult> {
+    const probe = await this.probeSource();
+    if (!probe.reachable || !probe.statusCode) {
+      return {
+        provider: this.name,
+        success: false,
+        extractionMode: 'not_available',
+        odds: [],
+        diagnostics: probe,
+        warnings: ['Fonte inatingível ou erro de rede'],
+      };
+    }
+
+    // O html não fica no ProbeResult por ser grande. Vamos buscar novamente (ou usar o probe apenas para diag).
+    // Para simplificar, fetchRaw.
+    let html = '';
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+      const res = await fetch(PROBE_URL, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: BROWSER_HEADERS,
+      });
+      clearTimeout(timeoutId);
+      html = await res.text();
+    } catch (err) {
+      return {
+        provider: this.name,
+        success: false,
+        extractionMode: 'not_available',
+        odds: [],
+        diagnostics: probe,
+        warnings: ['Erro ao buscar HTML para o parser: ' + String(err)],
+      };
+    }
+
+    const { parseOddsAgora, inspectOddsAgoraHtml } = await import('../server/oddsAgoraParserService');
+    const diag = inspectOddsAgoraHtml(html);
+    
+    // Atualizar os diagnósticos no ProbeResult se tiver algo novo, 
+    // mas vamos usar o diag local para tomar decisão.
+    
+    if (diag.extractionMode === 'js_rendered' || diag.extractionMode === 'api_endpoint' || diag.extractionMode === 'blocked' || diag.extractionMode === 'unknown') {
+       return {
+         provider: this.name,
+         success: false,
+         extractionMode: diag.extractionMode,
+         odds: [],
+         diagnostics: probe,
+         warnings: ['Não foi possível extrair odds: ' + diag.extractionMode, ...diag.notes],
+       };
+    }
+
+    try {
+      const odds = parseOddsAgora(html);
+      return {
+        provider: this.name,
+        success: true,
+        extractionMode: diag.extractionMode,
+        odds,
+        diagnostics: probe,
+        warnings: diag.notes,
+      };
+    } catch (err) {
+       return {
+         provider: this.name,
+         success: false,
+         extractionMode: diag.extractionMode,
+         odds: [],
+         diagnostics: probe,
+         warnings: ['Erro interno no parser: ' + String(err)],
+       };
+    }
+  }
 }
 
 export const oddsAgoraProvider = new OddsAgoraProvider();
-
-/*
- * NOTA SOBRE BROWSER RENDERING (Playwright — futuro):
- *
- * Se o probe retornar recommendation = 'needs_browser_rendering',
- * significa que o site renderiza o HTML via JavaScript no cliente.
- * Nesse caso, fetch() simples não é suficiente.
- *
- * Solução futura (Etapa 4+):
- *   import { chromium } from 'playwright';
- *   const browser = await chromium.launch({ headless: true });
- *   const page = await browser.newPage();
- *   await page.goto(PROBE_URL);
- *   const html = await page.content();
- *
- * Não ativar por padrão — aumenta custo de infraestrutura
- * e requer servidor com Chromium instalado (não disponível
- * em Vercel Serverless — usar apenas em ambiente dedicado).
- */
