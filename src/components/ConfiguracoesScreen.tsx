@@ -11,9 +11,15 @@ import {
   Zap,
   RefreshCw,
   Clock,
-  Wifi
+  Wifi,
+  Activity,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
-import { serverDataProvider } from '../lib/data/ServerDataProvider';
+import { serverDataProvider, type ProbeResult } from '../lib/data/ServerDataProvider';
 
 interface ConfiguracoesScreenProps {
   settings: UserSettings;
@@ -79,6 +85,39 @@ export default function ConfiguracoesScreen({
       setAdminFeedback({ type: 'err', msg: String(err) });
     } finally {
       setAdminLoading(null);
+    }
+  };
+
+  // Diagnóstico de fontes
+  const [probeResults, setProbeResults] = useState<Record<string, ProbeResult>>({});
+  const [probeLoading, setProbeLoading] = useState<string | null>(null);
+  const [showNotes, setShowNotes] = useState<Record<string, boolean>>({});
+
+  const runProbe = async (providerKey: string) => {
+    setProbeLoading(providerKey);
+    try {
+      const raw = await serverDataProvider.probeScraper(adminSecret, providerKey);
+      const result = Array.isArray(raw) ? raw[0] : raw;
+      setProbeResults((prev) => ({ ...prev, [providerKey]: result as ProbeResult }));
+    } catch (err) {
+      const errorResult: ProbeResult = {
+        provider: providerKey,
+        probedAt: new Date().toISOString(),
+        reachable: false,
+        blocked: false,
+        captchaDetected: false,
+        cloudflareDetected: false,
+        jsonDetected: false,
+        potentialApiEndpoints: [],
+        keywordHits: [],
+        confidence: 'unknown',
+        recommendation: 'not_available',
+        inspectionNotes: [],
+        error: String(err),
+      };
+      setProbeResults((prev) => ({ ...prev, [providerKey]: errorResult }));
+    } finally {
+      setProbeLoading(null);
     }
   };
 
@@ -568,29 +607,10 @@ export default function ConfiguracoesScreen({
               Recalcular
             </button>
 
-            <button
-              type="button"
-              disabled={!!adminLoading}
-              onClick={() => adminAction('probe-agora', () => serverDataProvider.probeScraper(adminSecret, 'oddsagora'))}
-              className="flex items-center justify-center gap-1.5 p-2.5 bg-[#0a0a0a] border border-[#151515] hover:border-zinc-600 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-40"
-            >
-              {adminLoading === 'probe-agora' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
-              Probe OddsAgora
-            </button>
-
-            <button
-              type="button"
-              disabled={!!adminLoading}
-              onClick={() => adminAction('probe-pedia', () => serverDataProvider.probeScraper(adminSecret, 'oddspedia'))}
-              className="flex items-center justify-center gap-1.5 p-2.5 bg-[#0a0a0a] border border-[#151515] hover:border-zinc-600 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer disabled:opacity-40"
-            >
-              {adminLoading === 'probe-pedia' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Wifi className="w-3 h-3" />}
-              Probe Oddspedia
-            </button>
           </div>
 
           {adminFeedback && (
-            <div className={`p-3 rounded border text-[10px] font-mono whitespace-pre-wrap break-all overflow-auto max-h-48 ${
+            <div className={`p-3 rounded border text-[10px] font-mono whitespace-pre-wrap break-all overflow-auto max-h-32 ${
               adminFeedback.type === 'ok'
                 ? 'bg-sky-500/5 border-sky-500/10 text-sky-400'
                 : 'bg-red-500/5 border-red-500/10 text-red-400'
@@ -599,6 +619,214 @@ export default function ConfiguracoesScreen({
             </div>
           )}
         </div>
+      </div>
+
+      {/* Painel de Diagnóstico de Fontes — Etapa 3 */}
+      <div className="bg-[#080808] border border-[#1a1a1a] rounded-lg p-5 space-y-5">
+        <div className="flex items-center gap-2">
+          <Activity className="w-3.5 h-3.5 text-violet-400" />
+          <h2 className="text-xs font-bold text-zinc-400 uppercase tracking-wider font-space font-extrabold">Diagnóstico de Fontes</h2>
+          <span className="text-[8px] font-bold text-violet-500 border border-violet-500/20 bg-violet-500/5 px-2 py-0.5 rounded font-mono uppercase">Etapa 3</span>
+        </div>
+
+        <p className="text-[10px] text-zinc-600 leading-relaxed">
+          Testa conectividade e analisa estrutura HTML de cada fonte. Nenhuma odd é extraída. Apenas diagnóstico.
+        </p>
+
+        {/* Botões de probe */}
+        <div className="grid grid-cols-2 gap-3">
+          {[{ key: 'oddsagora', label: 'OddsAgora', color: 'emerald' }, { key: 'oddspedia', label: 'Oddspedia', color: 'violet' }].map(({ key, label, color }) => (
+            <button
+              key={key}
+              type="button"
+              disabled={!!probeLoading}
+              onClick={() => runProbe(key)}
+              className={`flex items-center justify-center gap-2 p-3 bg-[#0a0a0a] border border-[#151515] hover:border-${color}-500/20 hover:text-${color}-400 text-zinc-500 rounded text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40`}
+            >
+              {probeLoading === key
+                ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                : <Wifi className="w-3.5 h-3.5" />
+              }
+              Testar {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tabela comparativa de resultados */}
+        {Object.keys(probeResults).length > 0 && (
+          <div className="space-y-4">
+            {/* Linha de header */}
+            <div className="grid grid-cols-7 gap-1 text-[8px] font-bold text-zinc-600 uppercase tracking-wider border-b border-[#121212] pb-2">
+              <span>Fonte</span>
+              <span>Status</span>
+              <span>Tempo</span>
+              <span>Tamanho</span>
+              <span>Bloqueio</span>
+              <span>Confiança</span>
+              <span>Recomendação</span>
+            </div>
+
+            {Object.entries(probeResults).map(([key, result]) => {
+              const isBlocked = result.blocked || result.captchaDetected || result.cloudflareDetected;
+              const recColors: Record<string, string> = {
+                candidate_for_parser: 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5',
+                inspect_network_or_api_pattern: 'text-sky-400 border-sky-500/20 bg-sky-500/5',
+                needs_browser_rendering: 'text-amber-400 border-amber-500/20 bg-amber-500/5',
+                blocked_or_risky: 'text-red-400 border-red-500/20 bg-red-500/5',
+                not_available: 'text-zinc-600 border-zinc-800 bg-zinc-950',
+              };
+              const confColors: Record<string, string> = {
+                high: 'text-emerald-400',
+                medium: 'text-amber-400',
+                low: 'text-red-400',
+                unknown: 'text-zinc-600',
+              };
+              const recLabels: Record<string, string> = {
+                candidate_for_parser: 'Parser',
+                inspect_network_or_api_pattern: 'API',
+                needs_browser_rendering: 'Playwright',
+                blocked_or_risky: 'Bloqueada',
+                not_available: 'Indisponível',
+              };
+
+              return (
+                <div key={key} className="space-y-2">
+                  <div className="grid grid-cols-7 gap-1 items-center text-[9px] font-mono">
+                    <span className="text-zinc-300 font-bold capitalize">{key === 'oddsagora' ? 'OddsAgora' : 'Oddspedia'}</span>
+
+                    <span className={`font-bold ${
+                      (result.statusCode ?? 0) === 200 ? 'text-emerald-400' :
+                      (result.statusCode ?? 0) >= 400 ? 'text-red-400' : 'text-zinc-500'
+                    }`}>
+                      {result.statusCode ?? '—'}
+                    </span>
+
+                    <span className="text-zinc-400">
+                      {result.responseTimeMs != null ? `${result.responseTimeMs}ms` : '—'}
+                    </span>
+
+                    <span className="text-zinc-400">
+                      {result.responseSize != null
+                        ? result.responseSize > 1024
+                          ? `${(result.responseSize / 1024).toFixed(0)}kb`
+                          : `${result.responseSize}b`
+                        : '—'}
+                    </span>
+
+                    <span className={isBlocked ? 'text-red-400 font-bold' : 'text-emerald-400'}>
+                      {isBlocked ? (
+                        <span className="flex items-center gap-1">
+                          <XCircle className="w-3 h-3" />
+                          {result.captchaDetected ? 'Captcha' : result.cloudflareDetected ? 'CF' : 'Bloq.'}
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3" /> Não
+                        </span>
+                      )}
+                    </span>
+
+                    <span className={`font-bold ${confColors[result.confidence] ?? 'text-zinc-600'}`}>
+                      {result.confidence === 'high' ? 'Alta' :
+                       result.confidence === 'medium' ? 'Média' :
+                       result.confidence === 'low' ? 'Baixa' : '—'}
+                    </span>
+
+                    <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded border ${
+                      recColors[result.recommendation] ?? recColors.not_available
+                    }`}>
+                      {recLabels[result.recommendation] ?? result.recommendation}
+                    </span>
+                  </div>
+
+                  {/* Badges de detalhes */}
+                  <div className="flex flex-wrap gap-1 ml-0">
+                    {result.jsonDetected && (
+                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-sky-500/5 border border-sky-500/15 text-sky-400">JSON detectado</span>
+                    )}
+                    {result.potentialApiEndpoints.length > 0 && (
+                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-violet-500/5 border border-violet-500/15 text-violet-400">{result.potentialApiEndpoints.length} endpoints</span>
+                    )}
+                    {result.keywordHits.length > 0 && (
+                      <span className="text-[8px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/5 border border-emerald-500/15 text-emerald-400">{result.keywordHits.length} keywords</span>
+                    )}
+                    {result.pageTitle && (
+                      <span className="text-[8px] px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 max-w-[200px] truncate">"{result.pageTitle}"</span>
+                    )}
+                    {result.cfRay && (
+                      <span className="text-[8px] font-mono px-1.5 py-0.5 rounded bg-orange-500/5 border border-orange-500/15 text-orange-400">CF-Ray: {result.cfRay.substring(0, 12)}...</span>
+                    )}
+                  </div>
+
+                  {/* Notas de inspeção — recolhíveis */}
+                  {result.inspectionNotes && result.inspectionNotes.length > 0 && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setShowNotes((prev) => ({ ...prev, [key]: !prev[key] }))}
+                        className="flex items-center gap-1 text-[9px] text-zinc-600 hover:text-zinc-400 transition-colors cursor-pointer"
+                      >
+                        {showNotes[key] ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        {showNotes[key] ? 'Ocultar notas' : `Ver ${result.inspectionNotes.length} notas de inspeção`}
+                      </button>
+
+                      {showNotes[key] && (
+                        <div className="mt-1.5 p-2.5 bg-[#050505] border border-[#111] rounded space-y-1">
+                          {result.inspectionNotes.map((note, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-[9px] text-zinc-500 font-mono">
+                              <span className="text-zinc-700 mt-0.5">›</span>
+                              <span>{note}</span>
+                            </div>
+                          ))}
+                          {result.potentialApiEndpoints.length > 0 && (
+                            <div className="mt-2 pt-2 border-t border-[#111]">
+                              <p className="text-[8px] font-bold text-zinc-600 uppercase tracking-wider mb-1">Endpoints detectados:</p>
+                              {result.potentialApiEndpoints.map((ep, i) => (
+                                <div key={i} className="text-[9px] font-mono text-sky-600 hover:text-sky-400">{ep}</div>
+                              ))}
+                            </div>
+                          )}
+                          {result.keywordHits.length > 0 && (
+                            <div className="mt-2 pt-2 border-t border-[#111]">
+                              <p className="text-[8px] font-bold text-zinc-600 uppercase tracking-wider mb-1">Keywords encontradas:</p>
+                              <div className="flex flex-wrap gap-1">
+                                {result.keywordHits.map((kw) => (
+                                  <span key={kw} className="text-[8px] font-mono px-1 py-0.5 bg-zinc-900 border border-zinc-800 text-zinc-500 rounded">{kw}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Linha divisória entre fontes */}
+                  <div className="border-b border-[#0e0e0e] mt-1" />
+                </div>
+              );
+            })}
+
+            {/* Legenda de recomendações */}
+            <div className="mt-2 p-3 bg-[#050505] border border-[#0d0d0d] rounded">
+              <p className="text-[8px] font-bold text-zinc-600 uppercase tracking-wider mb-2">Legenda de Recomendações</p>
+              <div className="grid grid-cols-1 gap-1 text-[8px] font-mono">
+                <div className="flex items-center gap-2"><span className="text-emerald-400 font-bold">Parser</span><span className="text-zinc-700">→</span><span className="text-zinc-600">Fonte saudável, pronta para criação de parser na Etapa 4</span></div>
+                <div className="flex items-center gap-2"><span className="text-sky-400 font-bold">API</span><span className="text-zinc-700">→</span><span className="text-zinc-600">Endpoints detectados — investigar padrão de API antes do parser</span></div>
+                <div className="flex items-center gap-2"><span className="text-amber-400 font-bold">Playwright</span><span className="text-zinc-700">→</span><span className="text-zinc-600">HTML renderizado via JS — requer browser headless (Etapa 4+)</span></div>
+                <div className="flex items-center gap-2"><span className="text-red-400 font-bold">Bloqueada</span><span className="text-zinc-700">→</span><span className="text-zinc-600">403/captcha/Cloudflare — risco alto, investigar alternativa</span></div>
+                <div className="flex items-center gap-2"><span className="text-zinc-600 font-bold">Indisponível</span><span className="text-zinc-700">→</span><span className="text-zinc-600">Timeout ou erro de rede</span></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {Object.keys(probeResults).length === 0 && (
+          <div className="flex items-center justify-center gap-2 p-6 border border-dashed border-[#151515] rounded text-zinc-700 text-[10px]">
+            <AlertTriangle className="w-4 h-4" />
+            Clique em "Testar OddsAgora" ou "Testar Oddspedia" para iniciar o diagnóstico
+          </div>
+        )}
       </div>
     </div>
   );

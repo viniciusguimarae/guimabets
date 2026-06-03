@@ -66,13 +66,56 @@ export interface ExpireResult {
   processedAt: string;
 }
 
+export type RecommendationType =
+  | 'candidate_for_parser'
+  | 'inspect_network_or_api_pattern'
+  | 'needs_browser_rendering'
+  | 'blocked_or_risky'
+  | 'not_available';
+
+export type ConfidenceLevel = 'high' | 'medium' | 'low' | 'unknown';
+
 export interface ProbeResult {
   provider: string;
+  probedAt: string;
   reachable: boolean;
   statusCode?: number;
   responseTimeMs?: number;
+  responseSize?: number;
+  contentType?: string;
+  serverHeader?: string;
+  cfRay?: string;
+  blocked: boolean;
+  captchaDetected: boolean;
+  cloudflareDetected: boolean;
+  pageTitle?: string;
+  htmlSize?: number;
+  jsonDetected: boolean;
+  potentialApiEndpoints: string[];
+  keywordHits: string[];
+  confidence: ConfidenceLevel;
+  recommendation: RecommendationType;
+  inspectionNotes: string[];
   error?: string;
-  probedAt: string;
+}
+
+export interface ProviderLog {
+  id: string;
+  provider_name: string;
+  action: string;
+  status: string;
+  message: string;
+  response_time_ms: number | null;
+  response_size: number | null;
+  provider_run_id: string;
+  created_at: string;
+}
+
+export interface ProviderLogsResponse {
+  logs: ProviderLog[];
+  count: number;
+  filter: { provider: string | null; limit: number };
+  fetchedAt: string;
 }
 
 class ServerDataProvider {
@@ -150,7 +193,7 @@ class ServerDataProvider {
     return res.json();
   }
 
-  async probeScraper(adminSecret?: string, provider?: string): Promise<ProbeResult | ProbeResult[]> {
+  async probeScraper(adminSecret?: string, provider?: string, url?: string): Promise<ProbeResult | ProbeResult[]> {
     const secret = adminSecret ?? this.getAdminSecret();
     const res = await fetch(`${this.baseUrl}/api/scraper/probe`, {
       method: 'POST',
@@ -158,7 +201,7 @@ class ServerDataProvider {
         'x-admin-secret': secret,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(provider ? { provider } : {}),
+      body: JSON.stringify(provider ? { provider, ...(url ? { url } : {}) } : {}),
       cache: 'no-store',
     });
     if (!res.ok) {
@@ -166,9 +209,30 @@ class ServerDataProvider {
       throw new Error(err.error ?? `Erro ${res.status}`);
     }
     const data = await res.json();
-    // Se retornou { results: [...] }, retornar o array
     if (data.results) return data.results;
     return data;
+  }
+
+  async getProviderLogs(
+    adminSecret?: string,
+    provider?: string,
+    limit?: number
+  ): Promise<ProviderLogsResponse> {
+    const secret = adminSecret ?? this.getAdminSecret();
+    const params = new URLSearchParams();
+    if (provider) params.set('provider', provider);
+    if (limit) params.set('limit', String(limit));
+    const query = params.toString() ? `?${params.toString()}` : '';
+
+    const res = await fetch(`${this.baseUrl}/api/provider/logs${query}`, {
+      headers: { 'x-admin-secret': secret },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error ?? `Erro ${res.status}`);
+    }
+    return res.json();
   }
 }
 

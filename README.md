@@ -20,9 +20,16 @@ O **GuimaBets** é um painel web privado, moderno e minimalista para monitoramen
 - API Routes Next.js para odds, oportunidades e admin
 - Ciclo de vida completo: expiração por TTL, eventos iniciados, stale
 - Provider mock que gera surebets matemáticas reais no Supabase
-- Adapters com probe de conectividade para OddsAgora e Oddspedia
 - Painel Admin na tela de Configurações
 - Camada híbrida: LocalStorage padrão + Supabase opcional
+
+### Etapa 3 — Probe Real das Fontes (Diagnóstico) ✅
+- Arquitetura de adapters para `OddsAgora` e `Oddspedia`.
+- Inspeção de tráfego HTML: detecta captchas, Cloudflare WAF, e bloqueios.
+- Extração estática de JSON embutido (`__NEXT_DATA__`, estado inicial) e Endpoints de API.
+- Motor de derivação de confiança com recomendação (Ex: `candidate_for_parser`, `needs_browser_rendering`, etc).
+- Painel de Diagnóstico visual colorido direto na Vercel sem precisar rodar localmente.
+- Nenhuma odd é extraída ainda — o foco é garantir viabilidade técnica de extração.
 
 ---
 
@@ -56,6 +63,9 @@ node test_surebet_engine.js
 
 # Ciclo de vida das odds (Etapa 2)
 node test_lifecycle.js
+
+# Inspeção e detecção de bloqueios (Etapa 3)
+node test_source_probe.js
 ```
 
 ### 4. Iniciar servidor de desenvolvimento
@@ -109,26 +119,30 @@ npm run dev
 | `POST` | `/api/odds/expire` | Admin | Expira odds antigas manualmente |
 | `POST` | `/api/opportunities/recalculate` | Admin | Recalcula oportunidades do zero |
 | `POST` | `/api/mock/generate` | Admin | Gera dados mock no Supabase |
-| `POST` | `/api/scraper/probe` | Admin | Testa conectividade com providers |
-| `POST` | `/api/scraper/run` | Admin | Placeholder para Etapa 3 |
+| `POST` | `/api/scraper/probe` | Admin | (Etapa 3) Executa diagnóstico de HTML e bloqueios de fonte |
+| `GET` | `/api/provider/logs` | Admin | (Etapa 3) Lista histórico de execuções dos probes |
 
 **Rotas Admin** exigem o header `x-admin-secret: SEU_GMB_ADMIN_SECRET`.
 
-### Exemplo de uso com curl:
+### Exemplo de uso de Probe (curl):
 ```bash
-# Health check
-curl http://localhost:3000/api/health
-
-# Gerar dados mock (requer Supabase configurado)
-curl -X POST http://localhost:3000/api/mock/generate \
-  -H "x-admin-secret: sua-senha-aqui"
-
-# Testar conectividade com OddsAgora
+# Executar probe completo na OddsAgora
 curl -X POST http://localhost:3000/api/scraper/probe \
   -H "x-admin-secret: sua-senha-aqui" \
   -H "Content-Type: application/json" \
   -d '{"provider":"oddsagora"}'
 ```
+
+---
+
+## 🔬 Etapa 3 — Como interpretar os Diagnósticos de Fonte
+
+O painel de Configurações possui uma aba de **Diagnóstico de Fontes**. As recomendações possíveis são:
+
+1. **Parser (candidate_for_parser)**: O site responde 200 OK, possui HTML grande e não apresenta WAF bloqueante. Está pronto para a Etapa 4 (Extração de texto).
+2. **Playwright (needs_browser_rendering)**: O site responde 200 OK, mas o HTML é vazio. Os dados são carregados via JavaScript pelo navegador. Solução: usar headless browser.
+3. **API (inspect_network_or_api_pattern)**: O site consome dados de uma API interna referenciada no HTML. O scraping direto da API é preferível.
+4. **Bloqueada (blocked_or_risky)**: Resposta 403, Cloudflare Challenge ou reCAPTCHA detectado. Tentar scraping padrão resultará em banimento de IP.
 
 ---
 
@@ -192,8 +206,9 @@ Futebol,La Liga,Real Madrid x Barcelona,2026-06-03T20:00:00Z,BOTH_TEAMS_TO_SCORE
 |-------|--------|
 | 1 — Frontend + Motor Matemático | ✅ Concluída |
 | 2 — Backend Mínimo + Ciclo de Vida | ✅ Concluída |
-| 3 — Scraper real de odds públicas | 🔜 Próxima |
-| 4 — Alertas e notificações | 🔜 Planejada |
+| 3 — Probe Real das Fontes (Diagnóstico) | ✅ Concluída |
+| 4 — Extração e Parsing de Dados | 🔜 Próxima |
+| 5 — Alertas e notificações | 🔜 Planejada |
 
 ---
 

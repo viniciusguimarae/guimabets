@@ -95,7 +95,18 @@ export class MockProvider implements OddsProviderAdapter {
     return {
       provider: this.name,
       reachable: true,
+      statusCode: 200,
       responseTimeMs: 0,
+      responseSize: 1024,
+      blocked: false,
+      captchaDetected: false,
+      cloudflareDetected: false,
+      jsonDetected: true,
+      potentialApiEndpoints: [],
+      keywordHits: ['mock', 'odds', 'event'],
+      confidence: 'high',
+      recommendation: 'candidate_for_parser',
+      inspectionNotes: ['Mock source sempre responde OK'],
       probedAt: new Date().toISOString(),
     };
   }
