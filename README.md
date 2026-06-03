@@ -43,6 +43,11 @@ O **GuimaBets** é um painel web privado, moderno e minimalista para monitoramen
 - Customização de Testes pela UI (Inspeção de URL manual no painel).
 - Correção de feedback do Parser para status "Nenhum Dado" (`no_data`) em casos de esqueleto HTML vazio.
 
+### Conclusão Final da Investigação: OddsAgora ⛔
+- **Decisão:** `not_viable_for_mvp`.
+- O OddsAgora exige renderização avançada com JavaScript (via browser) e expõe as odds/linhas apenas client-side de forma protegida. Tentativas de acesso cru e server-side falham em encontrar as odds puras.
+- A fonte está descartada temporariamente para o MVP em favor de uma API nativa limpa ou uma infraestrutura isolada com Headless.
+
 ---
 
 ## 🛠️ Tecnologias

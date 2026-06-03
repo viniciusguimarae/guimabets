@@ -131,6 +131,37 @@ export default function ConfiguracoesScreen({
   const [discoveryLoading, setDiscoveryLoading] = useState(false);
   const [discoveryResult, setDiscoveryResult] = useState<any>(null);
 
+  const [finalInvLoading, setFinalInvLoading] = useState(false);
+  const [finalInvResult, setFinalInvResult] = useState<any>(null);
+
+  const runOddsAgoraFinalInvestigation = async () => {
+    if (!adminSecret) {
+      setParserError('Secret do admin obrigatório');
+      return;
+    }
+    setFinalInvLoading(true);
+    setFinalInvResult(null);
+    setParserError(null);
+    try {
+      const res = await fetch('/api/scraper/oddsagora/final-investigation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-secret': adminSecret,
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Erro na requisição');
+      }
+      setFinalInvResult(data);
+    } catch (err) {
+      setParserError(String(err));
+    } finally {
+      setFinalInvLoading(false);
+    }
+  };
+
   const runOddsAgoraScraper = async (mode: string) => {
     if (!adminSecret) {
       setParserError('Secret do admin obrigatório');
@@ -926,10 +957,10 @@ export default function ConfiguracoesScreen({
             />
           </div>
           
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
             <button
               type="button"
-              disabled={!!parserLoading || discoveryLoading}
+              disabled={!!parserLoading || discoveryLoading || finalInvLoading}
               onClick={() => runOddsAgoraScraper('diagnostic')}
               className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-blue-500/20 hover:text-blue-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
             >
@@ -939,7 +970,7 @@ export default function ConfiguracoesScreen({
             
             <button
               type="button"
-              disabled={!!parserLoading || discoveryLoading}
+              disabled={!!parserLoading || discoveryLoading || finalInvLoading}
               onClick={() => runOddsAgoraScraper('parse_and_save')}
               className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-emerald-500/20 hover:text-emerald-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
             >
@@ -949,18 +980,62 @@ export default function ConfiguracoesScreen({
             
             <button
               type="button"
-              disabled={!!parserLoading || discoveryLoading}
+              disabled={!!parserLoading || discoveryLoading || finalInvLoading}
               onClick={runOddsAgoraDiscovery}
               className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-amber-500/20 hover:text-amber-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
             >
               {discoveryLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-              Descobrir URLs Internas
+              Descobrir URLs
+            </button>
+
+            <button
+              type="button"
+              disabled={!!parserLoading || discoveryLoading || finalInvLoading}
+              onClick={runOddsAgoraFinalInvestigation}
+              className="flex items-center justify-center gap-2 p-3 bg-[#110000] border border-red-900/50 hover:border-red-500/80 hover:bg-red-900/20 text-red-400 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+            >
+              {finalInvLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
+              Investigação Final OddsAgora
             </button>
           </div>
         </div>
         {parserError && (
           <div className="p-3 bg-red-500/5 border border-red-500/10 rounded text-[10px] text-red-400 font-mono">
             Erro: {parserError}
+          </div>
+        )}
+
+        {finalInvResult && (
+          <div className="space-y-4 p-4 bg-[#080505] border border-red-900/30 rounded">
+            <div className="flex items-center justify-between border-b border-red-900/30 pb-2">
+              <span className="text-[10px] font-bold text-red-400 uppercase">Diagnóstico Final e Decisão</span>
+              <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+                finalInvResult.sourceDecision.includes('viable') && !finalInvResult.sourceDecision.includes('not') 
+                  ? 'bg-emerald-500/10 text-emerald-400' 
+                  : 'bg-red-500/10 text-red-400'
+              }`}>
+                {finalInvResult.sourceDecision}
+              </span>
+            </div>
+
+            <div className="text-[10px] text-zinc-400 space-y-2">
+              <p><strong className="text-zinc-300">Decisão:</strong> {finalInvResult.reason}</p>
+              <p><strong className="text-zinc-300">Próximo Passo:</strong> {finalInvResult.recommendedNextAction}</p>
+            </div>
+
+            {finalInvResult.evidence && finalInvResult.evidence.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-red-900/30">
+                <p className="text-[9px] font-bold text-red-400/70 uppercase mb-2">Evidências Encontradas ({finalInvResult.urlsTested} URLs testadas)</p>
+                <div className="space-y-1">
+                  {finalInvResult.evidence.map((ev: string, idx: number) => (
+                    <div key={idx} className="flex items-start gap-1.5 text-[9px] text-zinc-500 font-mono">
+                      <span className="text-red-700 mt-0.5">›</span>
+                      <span>{ev}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
