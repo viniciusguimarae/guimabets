@@ -1165,37 +1165,54 @@ export default function ConfiguracoesScreen({
 function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lastRequestAt, setLastRequestAt] = useState<number>(0);
-  const COOLDOWN_MS = 60_000;
-
+  
   const [healthResult, setHealthResult] = useState<any>(null);
-  const [bookmakersResult, setBookmakersResult] = useState<any>(null);
-  const [probeResult, setProbeResult] = useState<any>(null);
   const [importResult, setImportResult] = useState<any>(null);
-  const [debugResult, setDebugResult] = useState<any>(null);
-  const [showDebugRaw, setShowDebugRaw] = useState(false);
 
-  const callOddsPapi = async (action: string, endpoint: string) => {
-    const now = Date.now();
-    if (action !== 'health' && now - lastRequestAt < COOLDOWN_MS) {
-      const remaining = Math.ceil((COOLDOWN_MS - (now - lastRequestAt)) / 1000);
-      setError(`Aguarde ${remaining}s antes de fazer nova requisição (limite da OddsPapi).`);
-      return;
-    }
-    if (!adminSecret) {
-      setError('Secret do admin obrigatório');
-      return;
-    }
-    setLoading(action);
+  // Cached states
+  const [sportsResult, setSportsResult] = useState<any>(null);
+  const [bookmakersResult, setBookmakersResult] = useState<any>(null);
+  const [tournamentsResult, setTournamentsResult] = useState<any>(null);
+  
+  // Probe states
+  const [oddsProbeResult, setOddsProbeResult] = useState<any>(null);
+  const [selectedTournament, setSelectedTournament] = useState<string>('');
+
+  useEffect(() => {
+    try {
+      const s = localStorage.getItem('oddspapi_sports');
+      const b = localStorage.getItem('oddspapi_bookmakers');
+      const t = localStorage.getItem('oddspapi_tournaments');
+      if (s) setSportsResult(JSON.parse(s));
+      if (b) setBookmakersResult(JSON.parse(b));
+      if (t) setTournamentsResult(JSON.parse(t));
+    } catch {}
+  }, []);
+
+  const saveCache = (key: string, data: any) => {
+    try {
+      localStorage.setItem(key, JSON.stringify({ ...data, _cachedAt: Date.now() }));
+    } catch {}
+  };
+
+  const isCacheValid = (data: any) => {
+    if (!data || !data._cachedAt) return false;
+    // Validade de 24 horas = 86400000 ms
+    return Date.now() - data._cachedAt < 86400000;
+  };
+
+  const callDebugAction = async (step: string, payload?: any) => {
+    if (!adminSecret) return setError('Secret do admin obrigatório');
+    setLoading(step);
     setError(null);
     try {
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/providers/oddspapi/debug-flow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-admin-secret': adminSecret },
+        body: JSON.stringify({ step, payload }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Erro na requisição');
-      setLastRequestAt(Date.now());
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Erro na requisição');
       return data;
     } catch (err) {
       setError(String(err));
@@ -1206,30 +1223,70 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
   };
 
   const runHealth = async () => {
-    const data = await callOddsPapi('health', '/api/providers/oddspapi/health');
-    if (data) setHealthResult(data);
-  };
-
-  const runBookmakers = async () => {
-    const data = await callOddsPapi('bookmakers', '/api/providers/oddspapi/bookmakers');
-    if (data) setBookmakersResult(data);
-  };
-
-  const runProbe = async () => {
-    const data = await callOddsPapi('probe', '/api/providers/oddspapi/football-probe');
-    if (data) setProbeResult(data);
+    const data = await callDebugAction('health'); // We could use regular endpoint but we are reusing pattern
+    // health is different, let's keep the old call logic for health/import
+    setLoading('health');
+    try {
+      const res = await fetch('/api/providers/oddspapi/health', {
+        method: 'POST',
+        headers: { 'x-admin-secret': adminSecret },
+      });
+      setHealthResult(await res.json());
+    } finally {
+      setLoading(null);
+    }
   };
 
   const runImport = async () => {
     if (!window.confirm('Esta ação consome requisições da OddsPapi. Confirma o import?')) return;
-    const data = await callOddsPapi('import', '/api/providers/oddspapi/import-football');
-    if (data) setImportResult(data);
+    setLoading('import');
+    try {
+      const res = await fetch('/api/providers/oddspapi/import-football', {
+        method: 'POST',
+        headers: { 'x-admin-secret': adminSecret },
+      });
+      setImportResult(await res.json());
+    } finally {
+      setLoading(null);
+    }
   };
 
-  const runDebug = async () => {
-    if (!window.confirm('Debug Flow executa 4 chamadas à OddsPapi. Confirma?')) return;
-    const data = await callOddsPapi('debug', '/api/providers/oddspapi/debug-flow');
-    if (data) setDebugResult(data);
+  // Etapas manuais:
+  const loadSports = async () => {
+    if (sportsResult && isCacheValid(sportsResult)) return; // já validado
+    if (!window.confirm('Esta ação consome 1 requisição da OddsPapi. Continuar?')) return;
+    const data = await callDebugAction('sports');
+    if (data) { setSportsResult(data); saveCache('oddspapi_sports', data); }
+  };
+
+  const loadBookmakers = async () => {
+    if (bookmakersResult && isCacheValid(bookmakersResult)) return;
+    if (!window.confirm('Esta ação consome 1 requisição da OddsPapi. Continuar?')) return;
+    setLoading('bookmakers');
+    try {
+      const res = await fetch('/api/providers/oddspapi/bookmakers', {
+        method: 'POST',
+        headers: { 'x-admin-secret': adminSecret },
+      });
+      const data = await res.json();
+      if (data.ok) { setBookmakersResult(data); saveCache('oddspapi_bookmakers', data); }
+      else setError(data.error);
+    } catch(e) { setError(String(e)); } finally { setLoading(null); }
+  };
+
+  const loadTournaments = async () => {
+    if (tournamentsResult && isCacheValid(tournamentsResult)) return;
+    if (!window.confirm('Esta ação consome 1 requisição da OddsPapi. Continuar?')) return;
+    const sportId = sportsResult?.sportIdFound ?? 10;
+    const data = await callDebugAction('tournaments', { sportId });
+    if (data) { setTournamentsResult(data); saveCache('oddspapi_tournaments', data); }
+  };
+
+  const testOdds = async () => {
+    if (!selectedTournament) return setError('Selecione 1 torneio primeiro.');
+    if (!window.confirm('Esta ação consome 1 requisição da OddsPapi. Continuar?')) return;
+    const data = await callDebugAction('odds-probe', { tournamentId: selectedTournament });
+    if (data) setOddsProbeResult(data);
   };
 
   const isLoading = !!loading;
@@ -1271,8 +1328,8 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
       </div>
 
       {/* Botões */}
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <button type="button" disabled={isLoading}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <button type="button" disabled={loading !== null}
           onClick={runHealth}
           className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-emerald-500/30 hover:text-emerald-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
         >
@@ -1280,33 +1337,33 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
           Testar Conexão
         </button>
 
-        <button type="button" disabled={isLoading}
-          onClick={runBookmakers}
+        <button type="button" disabled={loading !== null}
+          onClick={loadSports}
           className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-blue-500/30 hover:text-blue-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
         >
-          {loading === 'bookmakers' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
-          Listar Bookmakers
+          {loading === 'sports' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
+          Carregar Sports {sportsResult ? '(Cache)' : ''}
         </button>
 
-        <button type="button" disabled={isLoading}
-          onClick={runProbe}
+        <button type="button" disabled={loading !== null}
+          onClick={loadBookmakers}
           className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-sky-500/30 hover:text-sky-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
         >
-          {loading === 'probe' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
-          Testar Futebol
+          {loading === 'bookmakers' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+          Carregar Bookmakers {bookmakersResult ? '(Cache)' : ''}
         </button>
 
-        <button type="button" disabled={isLoading}
-          onClick={runDebug}
-          className="flex items-center justify-center gap-2 p-3 bg-[#0a0a00] border border-amber-900/50 hover:border-amber-500/60 hover:bg-amber-900/10 text-amber-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
+        <button type="button" disabled={loading !== null}
+          onClick={loadTournaments}
+          className="flex items-center justify-center gap-2 p-3 bg-[#0c0c0c] border border-[#1a1a1a] hover:border-amber-500/30 hover:text-amber-400 text-zinc-500 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40"
         >
-          {loading === 'debug' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-          Debug Flow
+          {loading === 'tournaments' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+          Carregar Torneios {tournamentsResult ? '(Cache)' : ''}
         </button>
 
-        <button type="button" disabled={isLoading}
+        <button type="button" disabled={loading !== null}
           onClick={runImport}
-          className="flex items-center justify-center gap-2 p-3 bg-[#0a0005] border border-violet-900/50 hover:border-violet-500/80 hover:bg-violet-900/20 text-violet-400 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40 col-span-2 md:col-span-2"
+          className="flex items-center justify-center gap-2 p-3 bg-[#0a0005] border border-violet-900/50 hover:border-violet-500/80 hover:bg-violet-900/20 text-violet-400 rounded text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-40 col-span-2 md:col-span-4"
         >
           {loading === 'import' ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Database className="w-3.5 h-3.5" />}
           Importar Odds de Futebol → Supabase
@@ -1329,6 +1386,17 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
             <div><p className="text-zinc-600">Reqs Restantes</p><p className="text-zinc-300">{healthResult.requestsRemaining ?? '—'}</p></div>
           </div>
           {healthResult.error && <p className="text-[9px] text-red-400 font-mono mt-2">{healthResult.error}</p>}
+        </div>
+      )}
+
+      {/* Sports Result */}
+      {sportsResult && (
+        <div className="p-4 bg-[#0a0a0a] border border-[#151515] rounded space-y-2">
+          <p className="text-[9px] font-bold text-zinc-500 uppercase">Sports — /v4/sports</p>
+          <div className="flex gap-4 text-[9px] font-mono text-zinc-400">
+            <span>Total: {sportsResult.sports?.length}</span>
+            <span className="text-emerald-400">Soccer SportId: {sportsResult.sportIdFound}</span>
+          </div>
         </div>
       )}
 
@@ -1366,104 +1434,94 @@ function OddsPapiPanel({ adminSecret }: { adminSecret: string }) {
             </div>
             <div>
               <p className="text-zinc-700 font-bold mb-1">Prioritárias ausentes ({bookmakersResult.priorityMissing?.length})</p>
-              {bookmakersResult.priorityMissing?.slice(0, 6).map((b: string, i: number) => (
+              {bookmakersResult.priorityMissing?.slice(0, 8).map((b: string, i: number) => (
                 <p key={i} className="text-zinc-600">✗ {b}</p>
               ))}
             </div>
           </div>
-          {bookmakersResult.error && <p className="text-[9px] text-red-400 font-mono">{bookmakersResult.error}</p>}
         </div>
       )}
 
-      {/* Probe result */}
-      {probeResult && (
+      {/* Tournaments result & Odds Probe */}
+      {tournamentsResult && (
         <div className="p-4 bg-[#0a0a0a] border border-[#151515] rounded space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-[9px] font-bold text-zinc-500 uppercase">Probe Futebol — Fluxo Oficial</p>
-            <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
-              probeResult.technicalVerdict === 'viable' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'
-            }`}>{probeResult.technicalVerdict}</span>
+            <p className="text-[9px] font-bold text-zinc-500 uppercase">Torneios de Futebol</p>
+            <span className="text-[8px] text-zinc-600 font-mono">total: {tournamentsResult.rawCount}</span>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[9px] font-mono">
-            <div><p className="text-zinc-600">SportId</p><p className="text-zinc-300 font-bold">{probeResult.sportIdUsed ?? '—'}</p></div>
-            <div><p className="text-zinc-600">Torneios</p><p className="text-zinc-300 font-bold">{probeResult.tournamentsFound}</p></div>
-            <div><p className="text-zinc-600">Eventos</p><p className="text-zinc-300 font-bold">{probeResult.eventsDetected}</p></div>
-            <div><p className="text-zinc-600">Odds</p><p className="text-zinc-300 font-bold">{probeResult.oddsCount}</p></div>
-            <div><p className="text-zinc-600">Casas</p><p className="text-zinc-300 font-bold">{probeResult.bookmakersDetected?.length ?? 0}</p></div>
-            <div><p className="text-zinc-600">Mercados</p><p className="text-zinc-300 font-bold">{probeResult.marketsDetected?.length ?? 0}</p></div>
+          
+          <div className="space-y-1 max-h-40 overflow-y-auto pr-2 border border-[#1a1a1a] rounded p-2">
+            {tournamentsResult.tournaments?.slice(0, 50).map((t: any) => (
+              <div key={t.tournamentId ?? t.id} className="flex justify-between items-center text-[9px] font-mono border-b border-[#111] pb-1 mb-1">
+                <span className="text-zinc-300">#{t.tournamentId ?? t.id} {t.tournamentName ?? t.name} <span className="text-zinc-600 text-[8px]">({t.categoryName ?? t.category})</span></span>
+                <span className="text-amber-500/70">↑{t.upcomingFixtures ?? 0} ⚡{t.liveFixtures ?? 0} 📅{t.futureFixtures ?? 0}</span>
+              </div>
+            ))}
           </div>
-          {probeResult.tournamentsChosen?.length > 0 && (
-            <div className="mt-1">
-              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Torneios escolhidos para probe</p>
-              {probeResult.tournamentsChosen.map((t: any, i: number) => (
-                <p key={i} className="text-[9px] font-mono text-zinc-500">#{t.id} {t.name} · ↑{t.upcoming ?? 0} ⚡{t.live ?? 0} 📅{t.future ?? 0}</p>
-              ))}
+
+          <div className="pt-3 border-t border-[#1a1a1a] flex gap-2 items-end">
+            <div className="flex-1">
+              <label className="block text-[9px] font-bold text-zinc-500 uppercase mb-1">Torneio para testar odds</label>
+              <select 
+                value={selectedTournament} 
+                onChange={e => setSelectedTournament(e.target.value)}
+                className="w-full bg-[#050505] border border-[#222] rounded p-2 text-zinc-300 text-[9px] font-mono outline-none"
+              >
+                <option value="">Selecione um torneio com fixtures &gt; 0</option>
+                {tournamentsResult.tournaments?.filter((t: any) => (t.upcomingFixtures||0)+(t.liveFixtures||0)+(t.futureFixtures||0) > 0).map((t: any) => (
+                  <option key={t.tournamentId ?? t.id} value={t.tournamentId ?? t.id}>
+                    {t.tournamentName ?? t.name} (↑{t.upcomingFixtures||0} ⚡{t.liveFixtures||0})
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
-          {probeResult.sampleEvent && (
-            <div className="mt-1 pt-2 border-t border-[#151515]">
-              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Amostra de Evento</p>
-              <p className="text-[9px] text-zinc-400 font-mono">{probeResult.sampleEvent.home} x {probeResult.sampleEvent.away}</p>
-              <p className="text-[9px] text-zinc-600 font-mono">{probeResult.sampleEvent.date} · {probeResult.sampleEvent.bkCount} casas</p>
-              <p className="text-[9px] text-zinc-600 font-mono">Keys: {probeResult.sampleEvent.topKeys?.join(', ')}</p>
-            </div>
-          )}
-          {probeResult.rawShape && Object.keys(probeResult.rawShape).length > 0 && (
-            <div className="mt-1 pt-2 border-t border-[#151515]">
-              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Shape da Resposta</p>
-              <p className="text-[9px] font-mono text-zinc-600">toplevel: [{probeResult.rawShape.topLevelKeys?.join(', ')}]</p>
-              <p className="text-[9px] font-mono text-zinc-600">fixture: [{probeResult.rawShape.sampleFixtureKeys?.join(', ')}]</p>
-              <p className="text-[9px] font-mono text-zinc-600">bk: [{probeResult.rawShape.sampleBkKeys?.join(', ')}]</p>
-              <p className="text-[9px] font-mono text-zinc-600">market: [{probeResult.rawShape.sampleMarketKeys?.join(', ')}]</p>
-            </div>
-          )}
-          {probeResult.error && <p className="text-[9px] text-red-400 font-mono mt-1">{probeResult.error}</p>}
+            <button type="button" disabled={loading !== null || !selectedTournament} onClick={testOdds} className="bg-emerald-900/30 text-emerald-500 hover:bg-emerald-900/50 border border-emerald-900/50 rounded px-4 py-2 text-[9px] font-bold uppercase transition-all whitespace-nowrap">
+              Testar Odds
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Debug Flow result */}
-      {debugResult && (
+      {/* Odds Probe Result */}
+      {oddsProbeResult && (
         <div className="p-4 bg-[#080800] border border-amber-900/30 rounded space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-[9px] font-bold text-amber-500/70 uppercase">Debug Flow Completo</p>
-            <button onClick={() => setShowDebugRaw(!showDebugRaw)} className="text-[8px] text-zinc-600 hover:text-zinc-400 cursor-pointer">
-              {showDebugRaw ? 'Ocultar JSON' : 'Ver JSON completo'}
-            </button>
+            <p className="text-[9px] font-bold text-amber-500/70 uppercase">Resultado das Odds</p>
+            <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+              oddsProbeResult.verdict === 'viável tecnicamente' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+            }`}>{oddsProbeResult.verdict}</span>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-[9px] font-mono">
-            <div><p className="text-zinc-600">Sports retornados</p><p className="text-zinc-300">{debugResult.sports?.length ?? 0}</p></div>
-            <div><p className="text-zinc-600">SportId Soccer</p><p className="text-amber-400 font-bold">{debugResult.sportIdFound ?? '—'}</p></div>
-            <div><p className="text-zinc-600">Bookmakers</p><p className="text-zinc-300">{debugResult.bookmakers?.length ?? 0}</p></div>
-            <div><p className="text-zinc-600">Torneios</p><p className="text-zinc-300">{debugResult.tournaments?.length ?? 0}</p></div>
-            <div><p className="text-zinc-600">Escolhidos</p><p className="text-zinc-300">{debugResult.tournamentsChosen?.length ?? 0}</p></div>
-            <div><p className="text-zinc-600">Fixtures retornados</p><p className="text-amber-400 font-bold">{debugResult.oddsShape?.totalFixtures ?? '—'}</p></div>
-          </div>
-          {debugResult.bookmakers?.length > 0 && (
-            <div>
-              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Bookmakers disponíveis</p>
-              <div className="flex flex-wrap gap-1">
-                {debugResult.bookmakers.map((b: any, i: number) => (
-                  <span key={i} className="text-[8px] font-mono px-1.5 py-0.5 bg-[#111] border border-[#222] rounded text-zinc-400">{b.name} ({b.slug})</span>
-                ))}
-              </div>
+
+          {oddsProbeResult.safeUrl && (
+            <div className="mt-1">
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">URL Segura Chamada</p>
+              <p className="text-[8px] font-mono text-zinc-400 break-all bg-black p-1.5 rounded border border-[#1a1a1a]">{oddsProbeResult.safeUrl}</p>
             </div>
           )}
-          {debugResult.oddsShape?.sampleFixtureKeys?.length > 0 && (
-            <div>
-              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Shape da Fixture</p>
-              <p className="text-[9px] font-mono text-zinc-600">fixture: [{debugResult.oddsShape.sampleFixtureKeys?.join(', ')}]</p>
-              <p className="text-[9px] font-mono text-zinc-600">bk: [{debugResult.oddsShape.sampleBkKeys?.join(', ')}]</p>
-              <p className="text-[9px] font-mono text-zinc-600">market: [{debugResult.oddsShape.sampleMarketKeys?.join(', ')}]</p>
-              <p className="text-[9px] font-mono text-zinc-600">outcome: [{debugResult.oddsShape.sampleOutcomeKeys?.join(', ')}]</p>
-              {debugResult.oddsShape.sampleEvent && (
-                <p className="text-[9px] font-mono text-amber-400/80 mt-1">{debugResult.oddsShape.sampleEvent.home} x {debugResult.oddsShape.sampleEvent.away} — {debugResult.oddsShape.sampleEvent.date}</p>
-              )}
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[9px] font-mono mt-2">
+            <div><p className="text-zinc-600">HTTP</p><p className="text-zinc-300 font-bold">{oddsProbeResult.status}</p></div>
+            <div><p className="text-zinc-600">Fixtures retornados</p><p className={oddsProbeResult.oddsShape?.totalFixtures > 0 ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>{oddsProbeResult.oddsShape?.totalFixtures ?? 0}</p></div>
+            <div><p className="text-zinc-600">Odds Totais</p><p className="text-zinc-300 font-bold">{oddsProbeResult.oddsShape?.oddsCount ?? 0}</p></div>
+          </div>
+
+          {oddsProbeResult.oddsShape?.totalFixtures === 0 && (
+            <div className="mt-2 p-2 bg-red-500/5 border border-red-500/10 rounded">
+              <p className="text-[9px] text-red-400 font-mono">A API retornou array vazio ou sem fixtures. Verifique se o torneio realmente tem jogos disponíveis no seu plano.</p>
+              {oddsProbeResult.oddsShape?.topLevelKeys && <p className="text-[8px] text-zinc-500 font-mono mt-1">Chaves do JSON: {oddsProbeResult.oddsShape.topLevelKeys.join(', ')}</p>}
             </div>
           )}
-          {showDebugRaw && (
-            <pre className="text-[8px] text-zinc-600 font-mono bg-black p-3 rounded overflow-auto max-h-60 border border-[#1a1a1a]">{JSON.stringify(debugResult, null, 2)}</pre>
+
+          {oddsProbeResult.oddsShape?.totalFixtures > 0 && (
+            <div className="mt-2 pt-2 border-t border-[#1a1a1a]">
+              <p className="text-[8px] font-bold text-zinc-600 uppercase mb-1">Shape do Primeiro Evento</p>
+              <p className="text-[8px] font-mono text-zinc-500">fixture keys: {oddsProbeResult.oddsShape.sampleFixtureKeys?.join(', ')}</p>
+              <p className="text-[8px] font-mono text-zinc-500">bookmaker keys: {oddsProbeResult.oddsShape.sampleBkKeys?.join(', ')}</p>
+              <p className="text-[8px] font-mono text-zinc-500">market keys: {oddsProbeResult.oddsShape.sampleMarketKeys?.join(', ')}</p>
+            </div>
           )}
-          {debugResult.error && <p className="text-[9px] text-red-400 font-mono">{debugResult.error}</p>}
+
+          {oddsProbeResult.error && <p className="text-[9px] text-red-400 font-mono mt-1">{oddsProbeResult.error}</p>}
         </div>
       )}
 

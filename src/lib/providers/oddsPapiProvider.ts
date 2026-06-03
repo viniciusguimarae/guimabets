@@ -417,111 +417,82 @@ export async function footballProbe(): Promise<{
 }
 
 // -----------------------------------------------------------------------
-// debugFlow — rota de debug: sports → bookmakers → tournaments → odds
+// Etapas do fluxo separadas para diagnóstico econômico
 // -----------------------------------------------------------------------
-export async function debugFlow(): Promise<{
-  ok: boolean;
-  sports: any[];
-  sportIdFound: number | null;
-  bookmakers: any[];
-  tournaments: any[];
-  tournamentsChosen: any[];
-  oddsShape: Record<string, any>;
-  error?: string;
-}> {
-  if (!getApiKey()) {
-    return {
-      ok: false, sports: [], sportIdFound: null, bookmakers: [],
-      tournaments: [], tournamentsChosen: [], oddsShape: {},
-      error: 'ODDSPAPI_API_KEY não configurada',
-    };
-  }
 
-  // 1. Sports
+export async function getSportsDiagnostic(): Promise<{ ok: boolean; sports: any[]; sportIdFound: number | null; error?: string }> {
+  if (!getApiKey()) return { ok: false, sports: [], sportIdFound: null, error: 'ODDSPAPI_API_KEY não configurada' };
   const { sportId, sports } = await getSoccerSportId();
-  const usedSportId = sportId ?? SOCCER_SPORT_ID;
+  return { ok: true, sports, sportIdFound: sportId ?? SOCCER_SPORT_ID };
+}
 
-  // 2. Bookmakers
-  const bkUrl = buildOddsPapiUrl('/bookmakers');
-  const { data: bkData } = await safeFetch(bkUrl);
-  const bkRaw: any[] = Array.isArray(bkData) ? bkData : (bkData?.data ?? bkData?.bookmakers ?? []);
-  const bookmakers = bkRaw.slice(0, 30).map((b: any) => ({
-    name: b.bookmakerName || b.name || b.slug || '',
-    slug: b.slug || b.key || '',
-    live: !!b.liveOdds,
+export async function getTournamentsDiagnostic(sportId: number): Promise<{ ok: boolean; tournaments: any[]; rawCount: number; error?: string }> {
+  if (!getApiKey()) return { ok: false, tournaments: [], rawCount: 0, error: 'ODDSPAPI_API_KEY não configurada' };
+  const { tournaments, rawCount } = await getSoccerTournaments(sportId);
+  return { ok: true, tournaments, rawCount };
+}
+
+export async function getOddsProbeDiagnostic(tournamentId: string): Promise<any> {
+  if (!getApiKey()) return { ok: false, error: 'ODDSPAPI_API_KEY não configurada' };
+
+  const urlObj = new URL(buildOddsPapiUrl('/odds-by-tournaments', {
+    tournamentIds: tournamentId,
+    oddsFormat:    'decimal',
+    verbosity:     '3',
   }));
+  // URL segura sem apiKey
+  const safeUrl = new URL(urlObj.toString());
+  safeUrl.searchParams.set('apiKey', '***');
 
-  // 3. Tournaments
-  const { tournaments, rawCount } = await getSoccerTournaments(usedSportId);
-  const chosen = pickBestTournaments(tournaments);
-  const tournamentIds = chosen
-    .map((t: any) => t.tournamentId ?? t.id ?? t.tournament_id)
-    .filter(Boolean)
-    .map(String);
-
-  // 4. Odds-by-tournaments
-  let oddsShape: Record<string, any> = { noTournaments: tournamentIds.length === 0 };
-  if (tournamentIds.length > 0) {
-    const oddsUrl = buildOddsPapiUrl('/odds-by-tournaments', {
-      tournamentIds: tournamentIds.join(','),
-      oddsFormat:    'decimal',
-      verbosity:     '3',
-    });
-    const { ok, status, data } = await safeFetch(oddsUrl, 25000);
-    const fixtures: any[] = Array.isArray(data)
-      ? data
-      : (data?.data ?? data?.fixtures ?? data?.events ?? data?.results ?? []);
-
-    const sample = fixtures[0];
-    oddsShape = {
-      ok,
-      status,
-      totalFixtures:     fixtures.length,
-      topLevelKeys:      data ? Object.keys(data).slice(0, 12) : [],
-      sampleFixtureKeys: sample ? Object.keys(sample).slice(0, 15) : [],
-      sampleBkKeys:      (() => {
-        const bl = sample?.bookmakerOdds ?? sample?.bookmakers ?? [];
-        return bl[0] ? Object.keys(bl[0]).slice(0, 10) : [];
-      })(),
-      sampleMarketKeys:  (() => {
-        const bl = sample?.bookmakerOdds ?? sample?.bookmakers ?? [];
-        const ml = bl[0]?.markets ?? bl[0]?.odds ?? [];
-        return ml[0] ? Object.keys(ml[0]).slice(0, 10) : [];
-      })(),
-      sampleOutcomeKeys: (() => {
-        const bl = sample?.bookmakerOdds ?? sample?.bookmakers ?? [];
-        const ml = bl[0]?.markets ?? bl[0]?.odds ?? [];
-        const ol = ml[0]?.outcomes ?? ml[0]?.selections ?? [];
-        return ol[0] ? Object.keys(ol[0]).slice(0, 8) : [];
-      })(),
-      sampleEvent: sample ? {
-        home: sample.homeTeam ?? sample.home_team ?? '',
-        away: sample.awayTeam ?? sample.away_team ?? '',
-        date: sample.startDate ?? sample.commence_time ?? '',
-      } : null,
-    };
+  const { ok, status, data, rawText } = await safeFetch(urlObj.toString(), 25000);
+  
+  if (!ok) {
+    return { ok: false, safeUrl: safeUrl.toString(), status, error: `HTTP ${status}: ${rawText.substring(0, 300)}` };
   }
 
-  return {
-    ok: true,
-    sports:           sports.slice(0, 20),
-    sportIdFound:     usedSportId,
-    bookmakers,
-    tournaments:      tournaments.slice(0, 20).map((t: any) => ({
-      id:       t.tournamentId ?? t.id,
-      name:     t.tournamentName ?? t.name,
-      category: t.categoryName ?? t.category ?? '',
-      future:   t.futureFixtures ?? 0,
-      upcoming: t.upcomingFixtures ?? 0,
-      live:     t.liveFixtures ?? 0,
-    })),
-    tournamentsChosen: chosen.map((t: any) => ({
-      id:   t.tournamentId ?? t.id,
-      name: t.tournamentName ?? t.name,
-    })),
-    oddsShape,
+  const fixtures: any[] = Array.isArray(data)
+    ? data
+    : (data?.data ?? data?.fixtures ?? data?.events ?? data?.results ?? []);
+
+  let oddsCount = 0;
+  for (const fixture of fixtures) {
+    const bkList: any[] = fixture.bookmakerOdds ?? fixture.bookmakers ?? fixture.odds ?? [];
+    for (const bk of bkList) {
+      const markets: any[] = bk.markets ?? bk.odds ?? bk.market ?? [];
+      for (const mkt of markets) {
+        oddsCount += (mkt.outcomes ?? mkt.selections ?? mkt.odds ?? []).length;
+      }
+    }
+  }
+
+  const sample = fixtures[0];
+  const oddsShape = {
+    totalFixtures:     fixtures.length,
+    oddsCount,
+    topLevelKeys:      data ? Object.keys(data).slice(0, 12) : [],
+    sampleFixtureKeys: sample ? Object.keys(sample).slice(0, 15) : [],
+    sampleBkKeys:      (() => {
+      const bl = sample?.bookmakerOdds ?? sample?.bookmakers ?? [];
+      return bl[0] ? Object.keys(bl[0]).slice(0, 10) : [];
+    })(),
+    sampleMarketKeys:  (() => {
+      const bl = sample?.bookmakerOdds ?? sample?.bookmakers ?? [];
+      const ml = bl[0]?.markets ?? bl[0]?.odds ?? [];
+      return ml[0] ? Object.keys(ml[0]).slice(0, 10) : [];
+    })(),
   };
+
+  let verdict = 'parcial, sem odds retornadas';
+  if (fixtures.length > 0 && oddsCount > 0) verdict = 'viável tecnicamente';
+  if (JSON.stringify(data).includes('plan limits')) verdict = 'plano grátis insuficiente';
+
+  return { ok: true, safeUrl: safeUrl.toString(), status, oddsShape, verdict };
 }
+
+// -----------------------------------------------------------------------
+// debugFlow — rota de debug (REMOVIDA/SUBSTITUÍDA pelas etapas acima)
+// -----------------------------------------------------------------------
+
 
 // -----------------------------------------------------------------------
 // Normalização de entidades
